@@ -1,0 +1,7 @@
+dataset:
+  name: mathvista
+  root: data/mathvista
+  split: testmini
+  image_key: image
+  question_key: question
+  answer_key: answer

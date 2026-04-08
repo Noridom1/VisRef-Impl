@@ -1,0 +1,23 @@
+seed: 42
+
+model:
+  name: internvl3_5_8b
+
+dataset:
+  name: mathvista
+
+run:
+  mode: st  # st | tsr | visref
+
+visref:
+  token_budget_ratio: 0.3
+  entropy_threshold: 0.25
+  max_steps: 10
+
+generation:
+  temperature: 0.0
+  top_p: 1.0
+  max_new_tokens: 512
+
+logging:
+  output_dir: outputs

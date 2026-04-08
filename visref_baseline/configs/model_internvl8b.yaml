@@ -1,0 +1,13 @@
+model:
+  name: internvl3_5_8b
+  hf_repo_or_local_path: OpenGVLab/InternVL3_5-8B
+  dtype: bfloat16
+  device_map: auto
+
+prompt:
+  system: "You are a helpful visual reasoning assistant."
+  think_instruction: "Think step by step before giving the final answer."
+  reflection_instruction: "Wait. Think more carefully using visual evidence."
+
+adapter:
+  class_name: InternVLAdapter

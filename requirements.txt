@@ -1,0 +1,10 @@
+torch
+transformers
+accelerate
+datasets
+pillow
+numpy
+scipy
+pandas
+tqdm
+pyyaml
