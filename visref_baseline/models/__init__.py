@@ -1,4 +1,7 @@
-"""Model adapters for MLRMs."""
+"""Model wrappers for MLRMs."""
 
-from .base_adapter import BaseMLRMAdapter
-from .internvl_adapter import InternVLAdapter
+from .base_wrapper import BaseModelWrapper
+from .internvl import InternVL
+from .qwen import Qwen
+
+__all__ = ["BaseModelWrapper", "InternVL", "Qwen"]

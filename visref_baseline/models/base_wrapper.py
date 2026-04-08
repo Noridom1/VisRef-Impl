@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
-class BaseMLRMAdapter(ABC):
-    """Unified interface for ST/TSR/VisRef runners."""
+class BaseModelWrapper(ABC):
+    """Unified model wrapper interface for ST/TSR/VisRef runners."""
 
     @abstractmethod
     def encode_image(self, image: Any) -> Any:
@@ -34,4 +34,16 @@ class BaseMLRMAdapter(ABC):
 
     @abstractmethod
     def generate_final_answer(self, state: dict[str, Any]) -> str:
+        raise NotImplementedError
+    
+    @abstractmethod
+    def generate_full_answer(
+        self,
+        question: str,
+        image: Any,
+        max_new_tokens: int = 128,
+        temperature: float = 0.0,
+        top_k: int | None = None,
+    ) -> str:
+        """Convenience method to run the full reasoning process and get the final answer."""
         raise NotImplementedError

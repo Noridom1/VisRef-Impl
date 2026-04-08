@@ -16,13 +16,13 @@ class ExperimentRunner:
         self,
         dataset,
         method_fn: Callable[[dict[str, Any], Any, dict[str, Any]], dict[str, Any]],
-        adapter,
+        model_wrapper,
         cfg: dict[str, Any],
     ) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
         for i in tqdm(range(len(dataset)), desc="Evaluating"):
             sample = dataset[i]
-            rec = method_fn(sample, adapter, cfg)
+            rec = method_fn(sample, model_wrapper, cfg)
             rec["is_correct"] = rec["final_answer"].strip().lower() == rec["gold_answer"].strip().lower()
             records.append(rec)
 

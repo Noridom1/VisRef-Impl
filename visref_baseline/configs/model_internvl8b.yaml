@@ -9,5 +9,5 @@ prompt:
   think_instruction: "Think step by step before giving the final answer."
   reflection_instruction: "Wait. Think more carefully using visual evidence."
 
-adapter:
-  class_name: InternVLAdapter
+wrapper:
+  class_name: InternVL

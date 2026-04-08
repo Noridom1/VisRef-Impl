@@ -4,13 +4,13 @@ from typing import Any
 
 import numpy as np
 
-from .base_adapter import BaseMLRMAdapter
+from .base_wrapper import BaseModelWrapper
 
 
-class InternVLAdapter(BaseMLRMAdapter):
-    """Starter adapter.
+class Qwen(BaseModelWrapper):
+    """Starter Qwen wrapper.
 
-    Replace placeholder logic with actual InternVL model loading and generation APIs.
+    Replace placeholder logic with actual Qwen-VL model loading and generation APIs.
     """
 
     def __init__(self, model_cfg: dict[str, Any]) -> None:
