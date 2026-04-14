@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 
-def setup_logging(output_dir: str, script_name: str, run_name: str | None = None) -> str:
+def setup_logging(output_dir: str,
+                  script_name: str,
+                  run_name: str | None = None) -> str:
     log_dir = Path(output_dir) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -13,7 +15,8 @@ def setup_logging(output_dir: str, script_name: str, run_name: str | None = None
     safe_run_name = f"_{run_name}" if run_name else ""
     log_path = log_dir / f"{script_name}{safe_run_name}_{timestamp}.log"
 
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setFormatter(formatter)
 

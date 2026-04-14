@@ -1,8 +1,8 @@
 dataset:
 
-  name: mathvision
+  name: mmstar
 
-  root: data/mathvision
+  root: dataset/mmstar
 
   split: testmini
 
@@ -12,5 +12,5 @@ dataset:
 
   answer_key: answer
 
-  choice_key: options
+
 

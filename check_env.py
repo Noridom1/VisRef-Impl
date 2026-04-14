@@ -2,6 +2,7 @@ import sys
 import importlib
 import subprocess
 
+
 def get_version(pkg_name):
     try:
         module = importlib.import_module(pkg_name)
@@ -9,10 +10,12 @@ def get_version(pkg_name):
     except ImportError:
         return "NOT INSTALLED"
 
+
 def print_header(title):
     print("\n" + "=" * 50)
     print(title)
     print("=" * 50)
+
 
 def main():
     print_header("PYTHON")
@@ -44,6 +47,7 @@ def main():
     print_header("CUDA INFO (PYTORCH)")
     try:
         import torch
+
         print(f"CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             print(f"CUDA version (torch): {torch.version.cuda}")
@@ -53,14 +57,13 @@ def main():
 
     print_header("PIP FREEZE (IMPORTANT)")
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run([sys.executable, "-m", "pip", "freeze"],
+                                capture_output=True,
+                                text=True)
         print(result.stdout)
     except Exception as e:
         print("Failed to run pip freeze:", e)
+
 
 if __name__ == "__main__":
     main()

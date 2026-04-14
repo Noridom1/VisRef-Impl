@@ -1,35 +1,20 @@
 from __future__ import annotations
-
-
-import os
-
-
-import sys
-
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-
-import argparse
-
-
-import logging
-
-
-from visref_baseline.utils.experiment import (
+from utils.seed import set_seed
+from utils.logging import setup_logging
+from utils.io import read_yaml
+from utils.experiment import (
     load_dataset,
     load_model_wrapper,
     merge_eval_cfg,
 )
+import logging
+import argparse
 
+import os
 
-from visref_baseline.utils.io import read_yaml
+import sys
 
-
-from visref_baseline.utils.logging import setup_logging
-
-
-from visref_baseline.utils.seed import set_seed
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 logger = logging.getLogger(__name__)
@@ -38,24 +23,23 @@ logger = logging.getLogger(__name__)
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Run VLM on single image-question pair for inference debugging"
-    )
+        description="Run VLM on single image-question pair for inference debugging")
 
     parser.add_argument(
         "--config",
-        default="./visref_baseline/configs/default.yaml",
+        default="./configs/default.yaml",
         help="Path to default.yaml",
     )
 
     parser.add_argument(
         "--model_cfg",
-        default="./visref_baseline/configs/qwen3-8b-thinking.yaml",
+        default="./configs/qwen3-8b-thinking.yaml",
         help="Path to model config yaml",
     )
 
     parser.add_argument(
         "--dataset_cfg",
-        default="./visref_baseline/configs/dataset_mathvision.yaml",
+        default="./configs/dataset_mathvision.yaml",
         help="Path to dataset config yaml",
     )
 
@@ -80,7 +64,9 @@ def main():
         help="Index of the example to run inference on (default: 0)",
     )
 
-    parser.add_argument("--mode", default="st", choices=["st", "tsr", "visref"])
+    parser.add_argument("--mode",
+                        default="st",
+                        choices=["st", "tsr", "visref"])
 
     parser.add_argument("--output_dir", default="outputs")
 
@@ -92,9 +78,8 @@ def main():
 
     dataset_cfg = read_yaml(args.dataset_cfg)
 
-    cfg = merge_eval_cfg(
-        default_cfg, model_cfg, dataset_cfg, args.mode, args.output_dir
-    )
+    cfg = merge_eval_cfg(default_cfg, model_cfg, dataset_cfg, args.mode,
+                         args.output_dir)
 
     log_path = setup_logging(
         cfg["logging"]["output_dir"],
@@ -120,7 +105,8 @@ def main():
 
     model_wrapper = load_model_wrapper(cfg["model"], cfg.get("wrapper"))
 
-    logger.info("Loaded dataset=%s samples=%d", cfg["dataset"]["name"], len(dataset))
+    logger.info("Loaded dataset=%s samples=%d", cfg["dataset"]["name"],
+                len(dataset))
 
     logger.info("Loaded model wrapper=%s", type(model_wrapper).__name__)
 
@@ -130,11 +116,15 @@ def main():
 
     logger.info("Selected example id=%s", example.get("id"))
 
-    print("Selected example question:", example[cfg["dataset"]["question_key"]])
+    print("Selected example question:",
+          example[cfg["dataset"]["question_key"]])
 
     print("Selected example image:", example[cfg["dataset"]["image_key"]])
 
-    print("Selected example choices:", example.get(cfg["dataset"].get("choice_key", None), None))
+    print(
+        "Selected example choices:",
+        example.get(cfg["dataset"].get("choice_key", None), None),
+    )
 
     # Run inference on the single example
 
@@ -154,8 +144,9 @@ def main():
     answer = model_wrapper.generate_full_answer(
         question=example[cfg["dataset"]["question_key"]],
         image=example[cfg["dataset"]["image_key"]],
-        choices=example['choices'] if 'choices' in example else None,
-        max_new_tokens=args.max_new_tokens if args.max_new_tokens is not None else 1024,
+        choices=example["choices"] if "choices" in example else None,
+        max_new_tokens=args.max_new_tokens
+        if args.max_new_tokens is not None else 1024,
         temperature=0.7,
         top_k=50,
     )

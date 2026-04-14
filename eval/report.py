@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from visref_baseline.utils.io import write_json
+from utils.io import write_json
 
 
-def build_main_table(st_summary: dict, tsr_summary: dict, visref_summary: dict) -> dict:
+def build_main_table(st_summary: dict, tsr_summary: dict,
+                     visref_summary: dict) -> dict:
     return {
         "ST": st_summary,
         "TSR": tsr_summary,

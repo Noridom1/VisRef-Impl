@@ -1,1 +1,0 @@
-"""VisRef baseline package."""

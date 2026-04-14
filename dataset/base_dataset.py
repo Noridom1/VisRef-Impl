@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-
 import json
-
 
 from abc import ABC, abstractmethod
 
-
 from pathlib import Path
-
 
 from typing import Any
 
@@ -54,14 +50,18 @@ class BaseVQADataset(ABC):
         row = self.samples[idx]
 
         return {
-            "id": row.get("id", idx),
+            "id":
+            row.get("id", idx),
             # "image": row[self.image_key],
-            "image": (
-                str(self.root / row[self.image_key]) if self.image_key in row else None
-            ),
-            "question": row[self.question_key],
-            "answer": row[self.answer_key],
-            "choices": row.get(self.choice_key, None),
+            "image":
+            (str(self.root /
+                 row[self.image_key]) if self.image_key in row else None),
+            "question":
+            row[self.question_key],
+            "answer":
+            row[self.answer_key],
+            "choices":
+            row.get(self.choice_key, None),
         }
 
     @staticmethod

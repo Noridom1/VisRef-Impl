@@ -1,8 +1,8 @@
 dataset:
 
-  name: mathvista
+  name: mathvision
 
-  root: data/mathvista
+  root: dataset/mathvision
 
   split: testmini
 
@@ -12,7 +12,5 @@ dataset:
 
   answer_key: answer
 
-  choice_key: choices
-
-
+  choice_key: options
 

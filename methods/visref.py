@@ -3,16 +3,18 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from visref_baseline.engine.stopping import predictive_entropy, should_stop
-from visref_baseline.methods.dpp_selector import build_Mk, build_kernel, greedy_logdet_select
+from engine.stopping import predictive_entropy, should_stop
+from methods.dpp_selector import build_Mk, build_kernel, greedy_logdet_select
 
 
-def run_visref(sample: dict[str, Any], model_wrapper, cfg: dict[str, Any]) -> dict[str, Any]:
+def run_visref(sample: dict[str, Any], model_wrapper,
+               cfg: dict[str, Any]) -> dict[str, Any]:
     start = time.perf_counter()
     prompt_cfg = cfg["prompt"]
     vis_cfg = cfg["visref"]
 
-    state = model_wrapper.start_reasoning(sample["question"], sample["image"], prompt_cfg)
+    state = model_wrapper.start_reasoning(sample["question"], sample["image"],
+                                          prompt_cfg)
     visual_tokens = model_wrapper.encode_image(sample["image"])
 
     entropy_trace: list[float] = []
@@ -20,7 +22,8 @@ def run_visref(sample: dict[str, Any], model_wrapper, cfg: dict[str, Any]) -> di
 
     extra_visual_tokens = None
     for step in range(1, vis_cfg["max_steps"] + 1):
-        _, state = model_wrapper.generate_reasoning_step(state, extra_visual_tokens=extra_visual_tokens)
+        _, state = model_wrapper.generate_reasoning_step(
+            state, extra_visual_tokens=extra_visual_tokens)
 
         z_k = model_wrapper.get_reasoning_text_embeddings(state)
         M_k = build_Mk(z_k)
@@ -34,7 +37,8 @@ def run_visref(sample: dict[str, Any], model_wrapper, cfg: dict[str, Any]) -> di
         probs = model_wrapper.get_answer_distribution(state)
         entropy = predictive_entropy(probs)
         entropy_trace.append(entropy)
-        if should_stop(entropy, vis_cfg["entropy_threshold"], step, vis_cfg["max_steps"]):
+        if should_stop(entropy, vis_cfg["entropy_threshold"], step,
+                       vis_cfg["max_steps"]):
             break
 
     pred = model_wrapper.generate_final_answer(state)

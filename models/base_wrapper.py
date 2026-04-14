@@ -12,7 +12,8 @@ class BaseModelWrapper(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def start_reasoning(self, question: str, image: Any, prompt_cfg: dict[str, Any]) -> dict[str, Any]:
+    def start_reasoning(self, question: str, image: Any,
+                        prompt_cfg: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
@@ -35,7 +36,7 @@ class BaseModelWrapper(ABC):
     @abstractmethod
     def generate_final_answer(self, state: dict[str, Any]) -> str:
         raise NotImplementedError
-    
+
     @abstractmethod
     def generate_full_answer(
         self,

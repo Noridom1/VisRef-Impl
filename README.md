@@ -16,8 +16,8 @@ VisRef: Visual Refocusing while Thinking Improves Test-Time Scaling in Multi-Mod
 
 ## What you need to fill in
 
-- Real InternVL adapter model loading and generation in `visref_baseline/models/internvl_adapter.py`
-- Dataset files under `data/...`
+- Real InternVL adapter model loading and generation in `models/internvl.py`
+- Dataset files under `dataset/...`
 - Optional: answer normalization specific to each benchmark
 - Optional: exact entropy extraction from model logits
 
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 
 2. Prepare dataset files (for example MathVista):
 
-- `data/mathvista/testmini.json` or `data/mathvista/testmini.jsonl`
+- `dataset/mathvista/testmini.json` or `dataset/mathvista/testmini.jsonl`
 
 Each item must include at least:
 
@@ -42,9 +42,9 @@ Each item must include at least:
 3. Run baseline modes:
 
 ```bash
-python scripts/run_eval.py --config visref_baseline/configs/default.yaml --model_cfg visref_baseline/configs/model_internvl8b.yaml --dataset_cfg visref_baseline/configs/dataset_mathvista.yaml --mode st
-python scripts/run_eval.py --config visref_baseline/configs/default.yaml --model_cfg visref_baseline/configs/model_internvl8b.yaml --dataset_cfg visref_baseline/configs/dataset_mathvista.yaml --mode tsr
-python scripts/run_eval.py --config visref_baseline/configs/default.yaml --model_cfg visref_baseline/configs/model_internvl8b.yaml --dataset_cfg visref_baseline/configs/dataset_mathvista.yaml --mode visref
+python scripts/run_eval.py --config configs/default.yaml --model_cfg configs/model_internvl8b.yaml --dataset_cfg configs/dataset_mathvista.yaml --mode st
+python scripts/run_eval.py --config configs/default.yaml --model_cfg configs/model_internvl8b.yaml --dataset_cfg configs/dataset_mathvista.yaml --mode tsr
+python scripts/run_eval.py --config configs/default.yaml --model_cfg configs/model_internvl8b.yaml --dataset_cfg configs/dataset_mathvista.yaml --mode visref
 ```
 
 Outputs are written to `outputs/`.

@@ -6,9 +6,8 @@ import logging
 import subprocess
 import sys
 
-from visref_baseline.utils.io import read_yaml
-from visref_baseline.utils.logging import setup_logging
-
+from utils.io import read_yaml
+from utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,8 @@ def main() -> None:
     budget_values = [0.2, 0.3, 0.4]
     modes = ["visref"]
 
-    for mode, entropy, budget in itertools.product(modes, entropy_values, budget_values):
+    for mode, entropy, budget in itertools.product(modes, entropy_values,
+                                                   budget_values):
         cmd = [
             sys.executable,
             "scripts/run_eval.py",
@@ -47,7 +47,8 @@ def main() -> None:
             "--output_dir",
             args.output_dir,
         ]
-        logger.info("Running mode=%s entropy=%s budget=%s", mode, entropy, budget)
+        logger.info("Running mode=%s entropy=%s budget=%s", mode, entropy,
+                    budget)
         # TODO: propagate these values through a temporary config override.
         subprocess.run(cmd, check=True)
 

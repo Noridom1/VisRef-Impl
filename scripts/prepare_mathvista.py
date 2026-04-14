@@ -6,26 +6,21 @@ import json
 
 from tqdm import tqdm
 
-
 # ====== CONFIG ======
 
-root_dir = "./data/mathvista"
+root_dir = "./dataset/mathvista"
 
 image_dir = os.path.join(root_dir, "images")
 
 os.makedirs(image_dir, exist_ok=True)
 
-
 jsonl_path = os.path.join(root_dir, "testmini.jsonl")
-
 
 # ====== LOAD DATASET ======
 
 dataset = load_dataset("AI4Math/MathVista", split="testmini")
 
-
 print(f"Dataset size: {len(dataset)}")
-
 
 # ====== PROCESS & SAVE ======
 
@@ -71,5 +66,4 @@ with open(jsonl_path, "w", encoding="utf-8") as f:
 
             print(f"Error at pid {sample.get('pid')}: {e}")
 
-
-print("✅ Done! Dataset exported to ./data/mathvista/")
+print("✅ Done! Dataset exported to ./dataset/mathvista/")

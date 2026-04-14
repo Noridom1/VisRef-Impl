@@ -6,8 +6,12 @@ import sys
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run fixed-budget parallel scaling experiments")
-    parser.add_argument("--chains", type=int, default=4, help="Number of parallel chains")
+    parser = argparse.ArgumentParser(
+        description="Run fixed-budget parallel scaling experiments")
+    parser.add_argument("--chains",
+                        type=int,
+                        default=4,
+                        help="Number of parallel chains")
     parser.add_argument("--config", required=True)
     parser.add_argument("--model_cfg", required=True)
     parser.add_argument("--dataset_cfg", required=True)

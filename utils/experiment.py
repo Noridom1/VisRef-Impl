@@ -4,7 +4,7 @@ from typing import Any
 
 
 def load_dataset(dataset_cfg: dict[str, Any]):
-    from visref_baseline.data import MMStarDataset, MathVisionDataset, MathVistaDataset
+    from dataset import MMStarDataset, MathVisionDataset, MathVistaDataset
 
     name = dataset_cfg["name"].lower()
     common = {
@@ -24,8 +24,9 @@ def load_dataset(dataset_cfg: dict[str, Any]):
     raise ValueError(f"Unsupported dataset: {name}")
 
 
-def load_model_wrapper(model_cfg: dict[str, Any], wrapper_cfg: dict[str, Any] | None = None):
-    from visref_baseline.models import InternVL, Qwen
+def load_model_wrapper(model_cfg: dict[str, Any],
+                       wrapper_cfg: dict[str, Any] | None = None):
+    from models import InternVL, Qwen
 
     wrapper_name = str((wrapper_cfg or {}).get("class_name", "")).lower()
     model_name = str(model_cfg.get("name", "")).lower()
@@ -36,11 +37,17 @@ def load_model_wrapper(model_cfg: dict[str, Any], wrapper_cfg: dict[str, Any] | 
     if "qwen" in selector:
         return Qwen(model_cfg)
     raise ValueError(
-        "Unsupported model/wrapper name. Add a wrapper in visref_baseline/models and map it in load_model_wrapper."
+        "Unsupported model/wrapper name. Add a wrapper in models and map it in load_model_wrapper."
     )
 
 
-def merge_eval_cfg(default_cfg: dict[str, Any], model_cfg: dict[str, Any], dataset_cfg: dict[str, Any], mode: str, output_dir: str) -> dict[str, Any]:
+def merge_eval_cfg(
+    default_cfg: dict[str, Any],
+    model_cfg: dict[str, Any],
+    dataset_cfg: dict[str, Any],
+    mode: str,
+    output_dir: str,
+) -> dict[str, Any]:
     merged = dict(default_cfg)
     merged["model"] = model_cfg["model"]
     merged["prompt"] = model_cfg["prompt"]

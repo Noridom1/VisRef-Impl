@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 
 # ====== CONFIG ======
-root_dir = Path("./data/mmstar")
+root_dir = Path("./dataset/mmstar")
 image_dir = root_dir / "images"
 image_dir.mkdir(parents=True, exist_ok=True)
 
@@ -16,6 +16,7 @@ print(f"Dataset size: {len(dataset)}")
 print("Sample:", dataset[0])
 
 # ====== PROCESS ======
+
 
 def format_options(choices):
     """
@@ -65,8 +66,8 @@ with open(jsonl_path, "w", encoding="utf-8") as f:
             "meta_info": {
                 "source": "MMStar",
                 "split": "val",
-                "image_path": str(img_path)
-            }
+                "image_path": str(img_path),
+            },
         }
 
         # IMPORTANT: usually you want path, not PIL object

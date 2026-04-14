@@ -25,12 +25,15 @@ class Qwen(BaseModelWrapper):
             "Qwen/Qwen3-VL-8B-Thinking",
             dtype=self.model_cfg.get("dtype", "auto"),
             device_map=self.model_cfg.get("device_map", "auto"),
-            attn_implementation=self.model_cfg.get("attn_implementation", "eager"),
+            attn_implementation=self.model_cfg.get("attn_implementation",
+                                                   "eager"),
         )
 
-        self.processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-8B-Thinking")
+        self.processor = AutoProcessor.from_pretrained(
+            "Qwen/Qwen3-VL-8B-Thinking")
 
-    def prepare_inputs(self, question: str, image: Any, choices: list[str] | None) -> dict[str, Any]:
+    def prepare_inputs(self, question: str, image: Any,
+                       choices: list[str] | None) -> dict[str, Any]:
         if isinstance(image, Image.Image):
             pil_image = image.convert("RGB")
         elif isinstance(image, np.ndarray):
@@ -41,7 +44,9 @@ class Qwen(BaseModelWrapper):
                 if arr.shape[-1] == 1:
                     arr = arr.squeeze(-1)
             else:
-                raise ValueError("NumPy image must have shape [H, W] or [H, W, C] with C in {1, 3, 4}.")
+                raise ValueError(
+                    "NumPy image must have shape [H, W] or [H, W, C] with C in {1, 3, 4}."
+                )
 
             if np.issubdtype(arr.dtype, np.floating):
                 if arr.size and float(arr.max()) <= 1.0:
@@ -62,16 +67,21 @@ class Qwen(BaseModelWrapper):
 
         if choices is not None:
             question += " Choices: " + ", ".join(choices)
-            
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": pil_image},
-                    {"type": "text", "text": question},
-                ],
-            }
-        ]
+
+        messages = [{
+            "role":
+            "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": pil_image
+                },
+                {
+                    "type": "text",
+                    "text": question
+                },
+            ],
+        }]
 
         inputs = self.processor.apply_chat_template(
             messages,
@@ -90,9 +100,8 @@ class Qwen(BaseModelWrapper):
 
         return rng.standard_normal((64, 128)).astype(np.float32)
 
-    def start_reasoning(
-        self, question: str, image: Any, prompt_cfg: dict[str, Any]
-    ) -> dict[str, Any]:
+    def start_reasoning(self, question: str, image: Any,
+                        prompt_cfg: dict[str, Any]) -> dict[str, Any]:
 
         return {
             "question": question,
@@ -120,7 +129,8 @@ class Qwen(BaseModelWrapper):
 
         return step_text, state
 
-    def get_reasoning_text_embeddings(self, state: dict[str, Any]) -> np.ndarray:
+    def get_reasoning_text_embeddings(self, state: dict[str,
+                                                        Any]) -> np.ndarray:
 
         # Placeholder z_k embeddings [T_k, d].
 
@@ -160,7 +170,7 @@ class Qwen(BaseModelWrapper):
             top_k=top_k,
         )
         generated_ids_trimmed = [
-            out_ids[len(in_ids) :]
+            out_ids[len(in_ids):]
             for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
         ]
         output_text = self.processor.batch_decode(

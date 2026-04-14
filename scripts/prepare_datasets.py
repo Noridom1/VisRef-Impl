@@ -7,15 +7,13 @@ from typing import Any
 from datasets import load_dataset
 from PIL import Image
 
-
-out_root = Path("data/mathvision")
+out_root = Path("dataset/mathvision")
 
 img_dir = out_root / "images"
 
 out_root.mkdir(parents=True, exist_ok=True)
 
 img_dir.mkdir(parents=True, exist_ok=True)
-
 
 split_name = "testmini"  # or "test"
 
@@ -41,12 +39,10 @@ def _load_mathvision_split(split: str):
         except Exception as e2:
             raise RuntimeError(
                 "Failed to load MathVision with both default loader and parquet fallback. "
-                "Please upgrade `datasets` (recommended >= 2.20) and retry."
-            ) from e2
+                "Please upgrade `datasets` (recommended >= 2.20) and retry.") from e2
 
 
 ds = _load_mathvision_split(split_name)
-
 
 rows = []
 
@@ -78,12 +74,14 @@ def _jsonable(value: Any) -> Any:
 
         return [_jsonable(v) for v in value]
 
-    # Fallback for HF/PIL/custom objects that are not directly JSON serializable.
+    # Fallback for HF/PIL/custom objects that are not directly JSON
+    # serializable.
 
     return str(value)
 
 
-def _extract_pil_image(ex: dict[str, Any]) -> tuple[Image.Image | None, str | None]:
+def _extract_pil_image(
+        ex: dict[str, Any]) -> tuple[Image.Image | None, str | None]:
 
     ext: str | None = None
 
@@ -123,6 +121,7 @@ def _extract_pil_image(ex: dict[str, Any]) -> tuple[Image.Image | None, str | No
 
     return pil_image.convert("RGB"), ext
 
+
 for i, ex in enumerate(ds):
 
     qid = str(ex.get("id", i))
@@ -131,7 +130,8 @@ for i, ex in enumerate(ds):
 
     if pil_image is None:
 
-        # If no image can be extracted, keep the sample but leave image path null.
+        # If no image can be extracted, keep the sample but leave image path
+        # null.
         saved_rel_path = None
 
     else:
@@ -143,10 +143,10 @@ for i, ex in enumerate(ds):
         saved_rel_path = str(Path("images") / f"{qid}{image_ext}")
 
     record = {k: _jsonable(v) for k, v in ex.items()}
-    # Keep all original keys and replace decoded image object with on-disk path.
+    # Keep all original keys and replace decoded image object with on-disk
+    # path.
     record["decoded_image"] = saved_rel_path
     rows.append(record)
-
 
 with (out_root / f"{split_name}.jsonl").open("w", encoding="utf-8") as f:
 

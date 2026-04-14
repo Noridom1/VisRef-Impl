@@ -14,7 +14,10 @@ def exact_match(pred: str, gold: str) -> bool:
 def compute_accuracy(records: list[dict]) -> float:
     if not records:
         return 0.0
-    hits = [1.0 if exact_match(r["final_answer"], r["gold_answer"]) else 0.0 for r in records]
+    hits = [
+        1.0 if exact_match(r["final_answer"], r["gold_answer"]) else 0.0
+        for r in records
+    ]
     return float(mean(hits))
 
 

@@ -23,7 +23,9 @@ def _safe_logdet(matrix: np.ndarray, eps: float = 1e-6) -> float:
     return float(logdet)
 
 
-def greedy_logdet_select(L: np.ndarray, m: int, eps: float = 1e-6) -> list[int]:
+def greedy_logdet_select(L: np.ndarray,
+                         m: int,
+                         eps: float = 1e-6) -> list[int]:
     n = L.shape[0]
     if m <= 0 or n == 0:
         return []
