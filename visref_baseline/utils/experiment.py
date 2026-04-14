@@ -13,6 +13,7 @@ def load_dataset(dataset_cfg: dict[str, Any]):
         "image_key": dataset_cfg["image_key"],
         "question_key": dataset_cfg["question_key"],
         "answer_key": dataset_cfg["answer_key"],
+        "choice_key": dataset_cfg.get("choice_key", None),
     }
     if name == "mathvista":
         return MathVistaDataset(**common)

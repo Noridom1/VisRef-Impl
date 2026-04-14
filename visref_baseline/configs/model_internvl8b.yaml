@@ -1,7 +1,8 @@
 model:
   name: internvl3_5_8b
   hf_repo_or_local_path: OpenGVLab/InternVL3_5-8B
-  dtype: bfloat16
+  dtype: float32
+  device: cuda
   device_map: auto
 
 prompt:

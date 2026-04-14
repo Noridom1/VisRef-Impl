@@ -5,7 +5,6 @@ from typing import Any
 
 from .base_dataset import BaseVQADataset
 
-
 class MathVistaDataset(BaseVQADataset):
     """MathVista loader expecting testmini.{json|jsonl} under dataset root."""
 

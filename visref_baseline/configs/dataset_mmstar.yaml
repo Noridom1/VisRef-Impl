@@ -1,8 +1,8 @@
 dataset:
 
-  name: mathvista
+  name: mmstar
 
-  root: data/mathvista
+  root: data/mmstar
 
   split: testmini
 
@@ -11,8 +11,6 @@ dataset:
   question_key: question
 
   answer_key: answer
-
-  choice_key: choices
 
 
 

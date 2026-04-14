@@ -1,0 +1,19 @@
+model:
+
+  name: Qwen3-VL-8B-Thinking
+  hf_repo_or_local_path: Qwen/Qwen3-VL-8B-Thinking
+  dtype: float16
+  device: cuda
+  device_map: auto
+  attn_implementation: flash_attention_2
+
+prompt:
+
+  system: "You are a helpful visual reasoning assistant."
+  think_instruction: "Think step by step before giving the final answer."
+  reflection_instruction: "Wait. Think more carefully using visual evidence."
+
+
+wrapper:
+
+  class_name: Qwen

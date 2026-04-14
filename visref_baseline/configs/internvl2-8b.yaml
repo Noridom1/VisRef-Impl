@@ -1,0 +1,30 @@
+model:
+
+  name: InternVL2-8B
+
+  hf_repo_or_local_path: OpenGVLab/InternVL2-8B
+
+  dtype: float32
+
+  device: cuda
+
+  device_map: auto
+
+
+
+prompt:
+
+  system: "You are a helpful visual reasoning assistant."
+
+  think_instruction: "Think step by step before giving the final answer."
+
+  reflection_instruction: "Wait. Think more carefully using visual evidence."
+
+
+
+wrapper:
+
+  class_name: InternVL
+
+
+

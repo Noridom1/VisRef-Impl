@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import random
 import importlib
-
+import torch
 import numpy as np
 
-torch = importlib.import_module("torch") if importlib.util.find_spec("torch") else None
 
 
 def set_seed(seed: int) -> None:
