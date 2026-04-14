@@ -2,7 +2,7 @@ dataset:
 
   name: mmstar
 
-  root: dataset/mmstar
+  root: data/mmstar
 
   split: testmini
 

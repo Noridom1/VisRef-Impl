@@ -7,7 +7,7 @@ from typing import Any
 from datasets import load_dataset
 from PIL import Image
 
-out_root = Path("dataset/mathvision")
+out_root = Path("data/mathvision")
 
 img_dir = out_root / "images"
 

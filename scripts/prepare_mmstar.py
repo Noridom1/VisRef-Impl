@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 
 # ====== CONFIG ======
-root_dir = Path("./dataset/mmstar")
+root_dir = Path("./data/mmstar")
 image_dir = root_dir / "images"
 image_dir.mkdir(parents=True, exist_ok=True)
 

@@ -2,7 +2,7 @@ dataset:
 
   name: mathvision
 
-  root: dataset/mathvision
+  root: data/mathvision
 
   split: testmini
 

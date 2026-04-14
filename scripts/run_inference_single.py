@@ -1,4 +1,9 @@
 from __future__ import annotations
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from utils.seed import set_seed
 from utils.logging import setup_logging
 from utils.io import read_yaml
@@ -9,12 +14,6 @@ from utils.experiment import (
 )
 import logging
 import argparse
-
-import os
-
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 # ====== CONFIG ======
 
-root_dir = "./dataset/mathvista"
+root_dir = "./data/mathvista"
 
 image_dir = os.path.join(root_dir, "images")
 
@@ -66,4 +66,4 @@ with open(jsonl_path, "w", encoding="utf-8") as f:
 
             print(f"Error at pid {sample.get('pid')}: {e}")
 
-print("✅ Done! Dataset exported to ./dataset/mathvista/")
+print("Done! Dataset exported to ./data/mathvista/")

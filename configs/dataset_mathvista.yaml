@@ -2,7 +2,7 @@ dataset:
 
   name: mathvista
 
-  root: dataset/mathvista
+  root: data/mathvista
 
   split: testmini
 

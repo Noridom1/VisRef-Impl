@@ -17,7 +17,7 @@ VisRef: Visual Refocusing while Thinking Improves Test-Time Scaling in Multi-Mod
 ## What you need to fill in
 
 - Real InternVL adapter model loading and generation in `models/internvl.py`
-- Dataset files under `dataset/...`
+- Dataset files under `data/...`
 - Optional: answer normalization specific to each benchmark
 - Optional: exact entropy extraction from model logits
 
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 
 2. Prepare dataset files (for example MathVista):
 
-- `dataset/mathvista/testmini.json` or `dataset/mathvista/testmini.jsonl`
+- `data/mathvista/testmini.json` or `data/mathvista/testmini.jsonl`
 
 Each item must include at least:
 
