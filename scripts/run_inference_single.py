@@ -134,7 +134,7 @@ def main():
         max_new_tokens=256,
         temperature=0.7,
         top_k=59,
-        force_wait_before_max=False,
+        # force_wait_before_max=False,
         # wait_token_text="Wait",
         # wait_token_candidates=[" Wait", "Wait"],
     )
