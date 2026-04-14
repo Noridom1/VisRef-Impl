@@ -16,9 +16,7 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-
 logger = logging.getLogger(__name__)
-
 
 def main():
 
@@ -130,26 +128,27 @@ def main():
 
     logger.info("Running inference on the selected example")
 
-    # answer = model_wrapper.generate_per_token(
-    #     question=example[cfg["dataset"]["question_key"]],
-    #     image=example[cfg["dataset"]["image_key"]],
-    #     max_new_tokens=256,
-    #     temperature=0.7,
-    #     top_k=59,
-    #     force_wait_before_max=False,
-    #     wait_token_text="Wait",
-    #     wait_token_candidates=[" Wait", "Wait"],
-    # )
-
-    answer = model_wrapper.generate_full_answer(
+    answer = model_wrapper.generate_per_token(
         question=example[cfg["dataset"]["question_key"]],
         image=example[cfg["dataset"]["image_key"]],
         choices=example["choices"] if "choices" in example else None,
-        max_new_tokens=args.max_new_tokens
-        if args.max_new_tokens is not None else 1024,
+        max_new_tokens=256,
         temperature=0.7,
-        top_k=50,
+        top_k=59,
+        force_wait_before_max=False,
+        # wait_token_text="Wait",
+        # wait_token_candidates=[" Wait", "Wait"],
     )
+
+    # answer = model_wrapper.generate_full_answer(
+    #     question=example[cfg["dataset"]["question_key"]],
+    #     image=example[cfg["dataset"]["image_key"]],
+    #     choices=example["choices"] if "choices" in example else None,
+    #     max_new_tokens=args.max_new_tokens
+    #     if args.max_new_tokens is not None else 1024,
+    #     temperature=0.7,
+    #     top_k=50,
+    # )
 
     print("Question:", example[cfg["dataset"]["question_key"]])
 
