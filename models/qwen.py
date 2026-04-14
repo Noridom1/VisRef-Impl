@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 import os
-from typing import Any
+from typing import Any, Callable
 import numpy as np
 from PIL import Image
+import torch
 
 from .base_wrapper import BaseModelWrapper
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
@@ -92,64 +93,6 @@ class Qwen(BaseModelWrapper):
         )
         return inputs.to(self.model.device)
 
-    def encode_image(self, image: Any) -> np.ndarray:
-
-        # Placeholder visual tokens with shape [N, d].
-
-        rng = np.random.default_rng(0)
-
-        return rng.standard_normal((64, 128)).astype(np.float32)
-
-    def start_reasoning(self, question: str, image: Any,
-                        prompt_cfg: dict[str, Any]) -> dict[str, Any]:
-
-        return {
-            "question": question,
-            "image": image,
-            "prompt_cfg": prompt_cfg,
-            "history": [],
-        }
-
-    def generate_reasoning_step(
-        self,
-        state: dict[str, Any],
-        extra_visual_tokens: Any | None = None,
-        reflection_instruction: str | None = None,
-    ) -> tuple[str, dict[str, Any]]:
-
-        k = len(state["history"]) + 1
-
-        prefix = "Reflect" if reflection_instruction else "Think"
-
-        extra = " with visual refocus" if extra_visual_tokens is not None else ""
-
-        step_text = f"{prefix} step {k}{extra}."
-
-        state["history"].append(step_text)
-
-        return step_text, state
-
-    def get_reasoning_text_embeddings(self, state: dict[str,
-                                                        Any]) -> np.ndarray:
-
-        # Placeholder z_k embeddings [T_k, d].
-
-        rng = np.random.default_rng(len(state["history"]))
-
-        return rng.standard_normal((32, 128)).astype(np.float32)
-
-    def get_answer_distribution(self, state: dict[str, Any]) -> np.ndarray:
-
-        # Placeholder 4-way answer distribution.
-
-        probs = np.array([0.7, 0.1, 0.1, 0.1], dtype=np.float32)
-
-        return probs / probs.sum()
-
-    def generate_final_answer(self, state: dict[str, Any]) -> str:
-
-        return "placeholder_answer"
-
     def generate_full_answer(
         self,
         question: str,
@@ -179,3 +122,142 @@ class Qwen(BaseModelWrapper):
             clean_up_tokenization_spaces=False,
         )
         return output_text[0]
+
+    def get_next_token_logits(
+        self,
+        question: str,
+        image: Any,
+        choices: list[str] | None = None,
+    ) -> torch.Tensor:
+        """Run one forward pass and return next-token logits with shape [B, vocab]."""
+        inputs = self.prepare_inputs(question, image, choices)
+        self.model.eval()
+        with torch.inference_mode():
+            outputs = self.model(**inputs, use_cache=False)
+        return outputs.logits[:, -1, :]
+
+    def generate_per_token(
+        self,
+        question: str,
+        image: Any,
+        choices: list[str] | None = None,
+        max_new_tokens: int = 128,
+        temperature: float = 0.0,
+        top_k: int | None = None,
+        token_hook: Callable[[dict[str, Any]], torch.Tensor | None]
+        | None = None,
+    ) -> str:
+        """Autoregressive decoding via explicit forward calls at every token step."""
+        model_inputs = self.prepare_inputs(question, image, choices)
+
+        generated = model_inputs["input_ids"]
+        attention_mask = model_inputs.get("attention_mask")
+        mm_token_type_ids = model_inputs.get("mm_token_type_ids")
+
+        # Vision inputs are only needed on the first decoding step when cache is empty.
+        first_step_static_inputs: dict[str, torch.Tensor] = {
+            k: v
+            for k, v in model_inputs.items()
+            if k
+            in {
+                "pixel_values",
+                "pixel_values_videos",
+                "image_grid_thw",
+                "video_grid_thw",
+            }
+        }
+
+        tokenizer = self.processor.tokenizer
+        eos_from_cfg = getattr(self.model.generation_config, "eos_token_id", None)
+        eos_raw = eos_from_cfg if eos_from_cfg is not None else tokenizer.eos_token_id
+        if eos_raw is None:
+            stop_token_ids: set[int] = set()
+        elif isinstance(eos_raw, int):
+            stop_token_ids = {int(eos_raw)}
+        else:
+            stop_token_ids = {int(x) for x in eos_raw}
+
+        generated_new_tokens: list[torch.Tensor] = []
+        past_key_values = None
+        step_input_ids = generated
+
+        self.model.eval()
+        with torch.inference_mode():
+            for step in range(max_new_tokens):
+                forward_inputs: dict[str, Any] = {
+                    "input_ids": step_input_ids,
+                    "attention_mask": attention_mask,
+                    "past_key_values": past_key_values,
+                    "use_cache": True,
+                }
+                if past_key_values is None:
+                    forward_inputs.update(first_step_static_inputs)
+                    if mm_token_type_ids is not None:
+                        forward_inputs["mm_token_type_ids"] = mm_token_type_ids
+
+                outputs = self.model(**forward_inputs)
+                logits = outputs.logits[:, -1, :]
+                past_key_values = outputs.past_key_values
+
+                if token_hook is not None:
+                    maybe_logits = token_hook({
+                        "step": step,
+                        "input_ids": generated,
+                        "logits": logits,
+                        "tokenizer": tokenizer,
+                    })
+                    if maybe_logits is not None:
+                        if not isinstance(maybe_logits, torch.Tensor):
+                            raise TypeError(
+                                "token_hook must return None or a torch.Tensor"
+                            )
+                        if maybe_logits.shape != logits.shape:
+                            raise ValueError(
+                                f"token_hook returned shape {tuple(maybe_logits.shape)}, expected {tuple(logits.shape)}"
+                            )
+                        logits = maybe_logits
+
+                if temperature <= 0.0:
+                    next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                else:
+                    step_logits = logits / temperature
+                    if top_k is not None and top_k > 0:
+                        k = min(top_k, step_logits.shape[-1])
+                        top_vals, top_idx = torch.topk(step_logits, k=k, dim=-1)
+                        probs = torch.softmax(top_vals, dim=-1)
+                        sampled = torch.multinomial(probs, num_samples=1)
+                        next_token = top_idx.gather(-1, sampled)
+                    else:
+                        probs = torch.softmax(step_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1)
+
+                generated = torch.cat([generated, next_token], dim=-1)
+                generated_new_tokens.append(next_token)
+                step_input_ids = next_token
+
+                if attention_mask is not None:
+                    ones = torch.ones_like(next_token, dtype=attention_mask.dtype)
+                    attention_mask = torch.cat([attention_mask, ones], dim=-1)
+                if mm_token_type_ids is not None:
+                    # Newly generated tokens are textual tokens in autoregressive decoding.
+                    text_type = torch.zeros_like(next_token,
+                                                 dtype=mm_token_type_ids.dtype)
+                    mm_token_type_ids = torch.cat([mm_token_type_ids, text_type], dim=-1)
+
+                if stop_token_ids:
+                    next_ids = next_token.squeeze(-1)
+                    stop_mask = torch.zeros_like(next_ids, dtype=torch.bool)
+                    for stop_id in stop_token_ids:
+                        stop_mask |= (next_ids == stop_id)
+                    if torch.all(stop_mask):
+                        break
+
+        if not generated_new_tokens:
+            return ""
+
+        new_token_ids = torch.cat(generated_new_tokens, dim=-1)
+        return tokenizer.decode(
+            new_token_ids[0],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
