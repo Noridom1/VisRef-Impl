@@ -6,11 +6,26 @@ model:
 
 
 
-  name: Qwen3-VL-8B-Thinking
 
 
 
-  hf_repo_or_local_path: Qwen/Qwen3-VL-8B-Thinking
+
+
+
+
+
+  name: Qwen3-VL-8B-Instruct
+
+
+
+
+
+
+  hf_repo_or_local_path: Qwen/Qwen3-VL-8B-Instruct
+
+
+
+
 
 
 
@@ -18,7 +33,15 @@ model:
 
 
 
+
+
+
+
   device: cuda
+
+
+
+
 
 
 
@@ -26,10 +49,22 @@ model:
 
 
 
+
+
+
+
   attn_implementation: flash_attention_2
 
 
+
+
+
   system_prompt: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Answer in the following format: <reasoning> Your reasoning here </reasoning>. <answer> The final answer here.</answer>"
+
+
+
+
+
 
 
 
@@ -42,11 +77,27 @@ prompt:
 
 
 
+
+
+
+
+
+
+
+
   system: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Answer in the following format: <reasoning> Your reasoning here </reasoning>. <answer> The final answer here.</answer>"
 
 
 
+
+
+
+
   think_instruction: "Think step by step before giving the final answer."
+
+
+
+
 
 
 
@@ -62,7 +113,27 @@ prompt:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 wrapper:
+
+
+
+
+
+
+
+
 
 
 

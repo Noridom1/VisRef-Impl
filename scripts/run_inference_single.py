@@ -1,26 +1,38 @@
 from __future__ import annotations
+
 import os
+
 import sys
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+
 from utils.seed import set_seed
+
 from utils.logging import setup_logging
+
 from utils.io import read_yaml
+
 from utils.experiment import (
     load_dataset,
     load_model_wrapper,
     merge_eval_cfg,
 )
+
 import logging
+
 import argparse
 
+
 logger = logging.getLogger(__name__)
+
 
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Run VLM on single image-question pair for inference debugging")
+        description="Run VLM on single image-question pair for inference debugging"
+    )
 
     parser.add_argument(
         "--config",
@@ -30,7 +42,7 @@ def main():
 
     parser.add_argument(
         "--model_cfg",
-        default="./configs/qwen3-8b-thinking.yaml",
+        default="./configs/qwen3-8b-instruct.yaml",
         help="Path to model config yaml",
     )
 
@@ -61,9 +73,7 @@ def main():
         help="Index of the example to run inference on (default: 0)",
     )
 
-    parser.add_argument("--mode",
-                        default="st",
-                        choices=["st", "tsr", "visref"])
+    parser.add_argument("--mode", default="st", choices=["st", "tsr", "visref"])
 
     parser.add_argument("--output_dir", default="outputs")
 
@@ -75,8 +85,9 @@ def main():
 
     dataset_cfg = read_yaml(args.dataset_cfg)
 
-    cfg = merge_eval_cfg(default_cfg, model_cfg, dataset_cfg, args.mode,
-                         args.output_dir)
+    cfg = merge_eval_cfg(
+        default_cfg, model_cfg, dataset_cfg, args.mode, args.output_dir
+    )
 
     log_path = setup_logging(
         cfg["logging"]["output_dir"],
@@ -102,8 +113,7 @@ def main():
 
     model_wrapper = load_model_wrapper(cfg["model"], cfg.get("wrapper"))
 
-    logger.info("Loaded dataset=%s samples=%d", cfg["dataset"]["name"],
-                len(dataset))
+    logger.info("Loaded dataset=%s samples=%d", cfg["dataset"]["name"], len(dataset))
 
     logger.info("Loaded model wrapper=%s", type(model_wrapper).__name__)
 
@@ -111,43 +121,42 @@ def main():
 
     example = dataset[args.index]  # Take the example at the specified index
 
+    print("Example keys:", list(example.keys()))
     logger.info("Selected example id=%s", example.get("id"))
 
-    print("Selected example question:",
-          example[cfg["dataset"]["question_key"]])
+    print("Selected example question:", example[cfg["dataset"]["question_key"]])
 
     print("Selected example image:", example[cfg["dataset"]["image_key"]])
 
     print(
         "Selected example choices:",
-        example.get(cfg["dataset"].get("choice_key", None), None),
+        example.get("choices", "N/A"),
     )
 
     # Run inference on the single example
 
     logger.info("Running inference on the selected example")
 
-    answer = model_wrapper.generate_per_token(
-        question=example[cfg["dataset"]["question_key"]],
-        image=example[cfg["dataset"]["image_key"]],
-        choices=example["choices"] if "choices" in example else None,
-        max_new_tokens=256,
-        temperature=0.7,
-        top_k=59,
-        # force_wait_before_max=False,
-        # wait_token_text="Wait",
-        # wait_token_candidates=[" Wait", "Wait"],
-    )
-
-    # answer = model_wrapper.generate_full_answer(
+    # answer = model_wrapper.generate_per_token(
     #     question=example[cfg["dataset"]["question_key"]],
     #     image=example[cfg["dataset"]["image_key"]],
     #     choices=example["choices"] if "choices" in example else None,
-    #     max_new_tokens=args.max_new_tokens
-    #     if args.max_new_tokens is not None else 1024,
+    #     max_new_tokens=args.max_new_tokens if args.max_new_tokens is not None else 1024,
     #     temperature=0.7,
     #     top_k=50,
+    #     # force_wait_before_max=False,
+    #     # wait_token_text="Wait",
+    #     # wait_token_candidates=[" Wait", "Wait"],
     # )
+
+    answer = model_wrapper.generate_full_answer(
+        question=example[cfg["dataset"]["question_key"]],
+        image=example[cfg["dataset"]["image_key"]],
+        choices=example["choices"] if "choices" in example else None,
+        max_new_tokens=args.max_new_tokens if args.max_new_tokens is not None else 1024,
+        temperature=0.0,
+        # top_k=50,
+    )
 
     print("Question:", example[cfg["dataset"]["question_key"]])
 
