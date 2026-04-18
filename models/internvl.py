@@ -70,7 +70,10 @@ class InternVL(BaseModelWrapper):
                 "all_tied_weights_keys" in message
                 or "requires `accelerate`" in message.lower()
             )
-            if fallback_needed and device_map not in (None, "", "none"):
+            if not fallback_needed:
+                raise
+
+            if device_map not in (None, "", "none"):
                 logger.warning(
                     "Model loading with device_map=%s failed (%s). "
                     "Retrying with device_map=None.",
@@ -79,12 +82,27 @@ class InternVL(BaseModelWrapper):
                 )
                 model_load_kwargs["device_map"] = None
                 resolved_device_map = None
+
+            try:
                 self.model = AutoModel.from_pretrained(
                     model_cfg["hf_repo_or_local_path"],
                     **model_load_kwargs,
                 )
-            else:
-                raise
+            except (AttributeError, ValueError) as exc_second:
+                if "all_tied_weights_keys" not in str(exc_second):
+                    raise
+                logger.warning(
+                    "Model loading still failed with all_tied_weights_keys bug (%s). "
+                    "Retrying with low_cpu_mem_usage=False and device_map=None.",
+                    exc_second,
+                )
+                model_load_kwargs["low_cpu_mem_usage"] = False
+                model_load_kwargs["device_map"] = None
+                resolved_device_map = None
+                self.model = AutoModel.from_pretrained(
+                    model_cfg["hf_repo_or_local_path"],
+                    **model_load_kwargs,
+                )
 
         if resolved_device_map in (None, "", "none"):
             self.model = self.model.to(self.device)
