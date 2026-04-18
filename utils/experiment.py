@@ -36,6 +36,12 @@ def load_model_wrapper(model_cfg: dict[str, Any],
     if "internvl" in selector:
         return InternVL(model_cfg)
     if "qwen" in selector:
+        if Qwen is None:
+            raise ImportError(
+                "Qwen wrapper is unavailable in the current environment. "
+                "Install a transformers version that provides Qwen3-VL classes "
+                "or switch model config to InternVL."
+            )
         return Qwen(model_cfg)
     raise ValueError(
         "Unsupported model/wrapper name. Add a wrapper in models and map it in load_model_wrapper."

@@ -2,6 +2,10 @@
 
 from .base_wrapper import BaseModelWrapper
 from .internvl import InternVL
-from .qwen import Qwen
+
+try:
+	from .qwen import Qwen
+except ImportError:
+	Qwen = None
 
 __all__ = ["BaseModelWrapper", "InternVL", "Qwen"]
