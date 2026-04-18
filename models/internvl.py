@@ -64,11 +64,13 @@ class InternVL(BaseModelWrapper):
                 model_cfg["hf_repo_or_local_path"],
                 **model_load_kwargs,
             )
-        except (AttributeError, ValueError) as exc:
-            message = str(exc)
+        except (AttributeError, ValueError, RuntimeError) as exc:
+            message = str(exc).lower()
             fallback_needed = (
                 "all_tied_weights_keys" in message
-                or "requires `accelerate`" in message.lower()
+                or "requires `accelerate`" in message
+                or "meta tensor" in message
+                or "tensor.item() cannot be called on meta tensors" in message
             )
             if not fallback_needed:
                 raise
@@ -88,8 +90,13 @@ class InternVL(BaseModelWrapper):
                     model_cfg["hf_repo_or_local_path"],
                     **model_load_kwargs,
                 )
-            except (AttributeError, ValueError) as exc_second:
-                if "all_tied_weights_keys" not in str(exc_second):
+            except (AttributeError, ValueError, RuntimeError) as exc_second:
+                second_message = str(exc_second).lower()
+                if (
+                    "all_tied_weights_keys" not in second_message
+                    and "meta tensor" not in second_message
+                    and "tensor.item() cannot be called on meta tensors" not in second_message
+                ):
                     raise
                 logger.warning(
                     "Model loading still failed with all_tied_weights_keys bug (%s). "
