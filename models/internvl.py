@@ -28,11 +28,24 @@ class InternVL(BaseModelWrapper):
         self.device = torch.device(model_cfg.get("device", "cuda"))
         self.model_dtype = self._resolve_dtype(model_cfg.get("dtype", "float16"))
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_cfg["hf_repo_or_local_path"],
-            trust_remote_code=True,
-            use_fast=False,
-        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_cfg["hf_repo_or_local_path"],
+                trust_remote_code=True,
+                use_fast=False,
+            )
+        except Exception as exc:
+            repo = model_cfg.get("hf_repo_or_local_path", "<unknown>")
+            raise RuntimeError(
+                "Failed to initialize tokenizer for "
+                f"{repo}. This usually means one of: "
+                "(1) missing sentencepiece/protobuf, "
+                "(2) corrupted HuggingFace cache for tokenizer files, or "
+                "(3) incompatible transformers version for this checkpoint. "
+                "Install sentencepiece + protobuf and retry. If it still fails, "
+                "clear the cached model directory and re-download. "
+                f"Original error: {exc}"
+            ) from exc
 
         device_map = model_cfg.get("device_map")
         self.model = AutoModel.from_pretrained(
