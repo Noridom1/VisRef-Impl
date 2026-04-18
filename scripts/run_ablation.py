@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
+import os
 import subprocess
 import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.io import read_yaml
 from utils.logging import setup_logging
@@ -33,6 +36,10 @@ def main() -> None:
 
     for mode, entropy, budget in itertools.product(modes, entropy_values,
                                                    budget_values):
+        run_name = (
+            f"ablation_{mode}_entropy_{entropy:.2f}_budget_{budget:.2f}".replace(
+                ".", "p")
+        )
         cmd = [
             sys.executable,
             "scripts/run_eval.py",
@@ -46,10 +53,15 @@ def main() -> None:
             mode,
             "--output_dir",
             args.output_dir,
+            "--run_name",
+            run_name,
+            "--entropy_threshold",
+            str(entropy),
+            "--token_budget_ratio",
+            str(budget),
         ]
         logger.info("Running mode=%s entropy=%s budget=%s", mode, entropy,
                     budget)
-        # TODO: propagate these values through a temporary config override.
         subprocess.run(cmd, check=True)
 
 

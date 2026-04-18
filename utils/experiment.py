@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 
@@ -48,7 +49,7 @@ def merge_eval_cfg(
     mode: str,
     output_dir: str,
 ) -> dict[str, Any]:
-    merged = dict(default_cfg)
+    merged = deepcopy(default_cfg)
     merged["model"] = model_cfg["model"]
     merged["prompt"] = model_cfg["prompt"]
     merged["wrapper"] = model_cfg.get("wrapper", {})

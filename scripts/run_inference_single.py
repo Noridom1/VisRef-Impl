@@ -7,9 +7,6 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-
-from utils.seed import set_seed
-
 from utils.logging import setup_logging
 
 from utils.io import read_yaml
@@ -107,6 +104,8 @@ def main():
 
     logger.info("Log file: %s", log_path)
 
+    from utils.seed import set_seed
+
     set_seed(args.seed)
 
     dataset = load_dataset(cfg["dataset"])
@@ -124,9 +123,9 @@ def main():
     print("Example keys:", list(example.keys()))
     logger.info("Selected example id=%s", example.get("id"))
 
-    print("Selected example question:", example[cfg["dataset"]["question_key"]])
+    print("Selected example question:", example["question"])
 
-    print("Selected example image:", example[cfg["dataset"]["image_key"]])
+    print("Selected example image:", example["image"])
 
     print(
         "Selected example choices:",
@@ -150,15 +149,15 @@ def main():
     # )
 
     answer = model_wrapper.generate_full_answer(
-        question=example[cfg["dataset"]["question_key"]],
-        image=example[cfg["dataset"]["image_key"]],
+        question=example["question"],
+        image=example["image"],
         choices=example["choices"] if "choices" in example else None,
         max_new_tokens=args.max_new_tokens if args.max_new_tokens is not None else 1024,
         temperature=0.0,
         # top_k=50,
     )
 
-    print("Question:", example[cfg["dataset"]["question_key"]])
+    print("Question:", example["question"])
 
     print("Answer:", answer)
 

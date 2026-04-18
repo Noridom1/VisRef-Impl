@@ -1,198 +1,514 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import re
 from typing import Any
 
-import torch
-from transformers import AutoTokenizer, AutoModel, LogitsProcessor, LogitsProcessorList
 import numpy as np
 from PIL import Image
+import torch
 from torchvision import transforms
+from transformers import AutoModel, AutoTokenizer
+
+from eval.metrics import extract_answer_text
 
 from .base_wrapper import BaseModelWrapper
 
 
-class InternVL(BaseModelWrapper):
-    """Starter InternVL wrapper.
+REASONING_TAG_RE = re.compile(
+    r"<reasoning_step>\s*(.*?)\s*</reasoning_step>",
+    re.IGNORECASE | re.DOTALL,
+)
 
-    Replace placeholder logic with actual InternVL model loading and generation APIs.
-    """
+
+class InternVL(BaseModelWrapper):
+    """Stateful InternVL wrapper for ST/TSR/VisRef style decoding."""
 
     def __init__(self, model_cfg: dict[str, Any]) -> None:
         self.model_cfg = model_cfg
-        self.device = model_cfg["device"]
+        self.device = torch.device(model_cfg.get("device", "cuda"))
+        self.model_dtype = self._resolve_dtype(model_cfg.get("dtype", "float16"))
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_cfg["hf_repo_or_local_path"],
             trust_remote_code=True,
             use_fast=False,
-            force_download=True,
         )
 
+        device_map = model_cfg.get("device_map")
         self.model = AutoModel.from_pretrained(
             model_cfg["hf_repo_or_local_path"],
-            torch_dtype=torch.float16,
+            torch_dtype=self.model_dtype,
             trust_remote_code=True,
-            low_cpu_mem_usage=False,
-            device_map=None,
-        ).to("cuda")
-
-    def prepare_inputs(
-            self,
-            text: str,
-            image: Any,
-            choices: list[str] | None = None) -> tuple[str, torch.Tensor]:
-        if isinstance(image, str):
-            image = Image.open(image).convert("RGB")
-
-        # InternVL image transform (simplified)
-        transform = transforms.Compose([
-            transforms.Resize((448, 448)),  # typical for InternVL
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
-
-        pixel_values = transform(image).unsqueeze(0).to(self.device).half()
-
-        if choices is not None:
-            text += " Choices: " + ", ".join(choices)
-
-        # Normalize dataset placeholders such as <image1>, <image2>, ... to InternVL's <image>.
-        normalized_text = re.sub(r"<image\d+>", "<image>", text)
-
-        # Keep at most one image marker for this single-image wrapper.
-        if "<image>" in normalized_text:
-            parts = normalized_text.split("<image>")
-            normalized_text = parts[0] + "<image>" + "".join(parts[1:])
-
-        # InternVL expects an explicit <image> marker in the user question.
-        if "<image>" not in normalized_text:
-            prompt = f"<image>\n{normalized_text}"
-        else:
-            prompt = normalized_text
-
-        return prompt, pixel_values
-
-    def _build_single_forward_inputs(
-        self,
-        prompt: str,
-        pixel_values: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        img_context_token_id = self._ensure_img_context_token_id()
-
-        num_image_token = self._get_expected_image_token_count(pixel_values)
-        if num_image_token <= 0:
-            raise RuntimeError(
-                "Cannot build InternVL forward inputs: invalid image token count."
-            )
-
-        image_token_block = "<img>" + ("<IMG_CONTEXT>" *
-                                       num_image_token) + "</img>"
-        prompt_for_forward = prompt.replace("<image>", image_token_block, 1)
-        tokenized = self.tokenizer(prompt_for_forward,
-                                   return_tensors="pt").to(self.device)
-
-        found_image_tokens = int(
-            (tokenized["input_ids"] == img_context_token_id).sum().item())
-        expected_image_tokens = int(num_image_token * pixel_values.shape[0])
-        if found_image_tokens != expected_image_tokens:
-            raise RuntimeError(
-                "Manual InternVL prompt/image token mismatch: "
-                f"found {found_image_tokens} <IMG_CONTEXT> ids, expected {expected_image_tokens}. "
-                "Ensure tokenizer contains <IMG_CONTEXT> as a special token and matches the model checkpoint."
-            )
-
-        model_inputs: dict[str, torch.Tensor] = {
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized.get("attention_mask"),
-            "pixel_values": pixel_values,
-        }
-
-        # Some InternVL builds require image_flags in forward.
-        model_inputs["image_flags"] = torch.ones(
-            (pixel_values.shape[0], 1),
-            dtype=torch.long,
-            device=self.device,
+            low_cpu_mem_usage=True,
+            device_map=device_map,
         )
-        return model_inputs
+        if device_map in (None, "", "none"):
+            self.model = self.model.to(self.device)
+        self.model.eval()
+
+    def _resolve_dtype(self, dtype_name: str | None) -> torch.dtype:
+        normalized = str(dtype_name or "float16").lower()
+        mapping = {
+            "float16": torch.float16,
+            "fp16": torch.float16,
+            "half": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "bf16": torch.bfloat16,
+            "float32": torch.float32,
+            "fp32": torch.float32,
+        }
+        return mapping.get(normalized, torch.float16)
+
+    @property
+    def language_model(self):
+        return getattr(self.model, "language_model", self.model)
+
+    @property
+    def text_device(self) -> torch.device:
+        return self._get_input_embeddings().weight.device
+
+    def _get_input_embeddings(self):
+        if hasattr(self.model, "get_input_embeddings"):
+            return self.model.get_input_embeddings()
+        return self.language_model.get_input_embeddings()
+
+    def _get_hidden_size(self) -> int:
+        for config_obj in [
+            getattr(self.language_model, "config", None),
+            getattr(self.model, "config", None),
+        ]:
+            if config_obj is None:
+                continue
+            if hasattr(config_obj, "hidden_size"):
+                return int(config_obj.hidden_size)
+            text_config = getattr(config_obj, "text_config", None)
+            if text_config is not None and hasattr(text_config, "hidden_size"):
+                return int(text_config.hidden_size)
+        raise RuntimeError("Could not resolve the InternVL language-model hidden size.")
+
+    def _normalize_question(self, question: str) -> str:
+        normalized = re.sub(r"<image\d*>", "", str(question))
+        normalized = normalized.replace("<image>", "")
+        return normalized.strip()
+
+    def _normalize_choices(self, choices: Any) -> list[str] | None:
+        if choices is None:
+            return None
+        if isinstance(choices, dict):
+            return [f"{key}. {value}" for key, value in choices.items()]
+        if isinstance(choices, (list, tuple)):
+            return [str(choice).strip() for choice in choices if str(choice).strip()]
+        text = str(choices).strip()
+        return [text] if text else None
+
+    def _load_image(self, image: Any) -> Image.Image:
+        if isinstance(image, Image.Image):
+            return image.convert("RGB")
+        if isinstance(image, str):
+            return Image.open(image).convert("RGB")
+        raise TypeError(f"Unsupported image type: {type(image)!r}")
+
+    def _prepare_pixel_values(self, image: Any) -> torch.Tensor:
+        pil_image = self._load_image(image)
+        transform = transforms.Compose([
+            transforms.Resize((448, 448)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
+        ])
+        pixel_values = transform(pil_image).unsqueeze(0)
+        return pixel_values.to(self.text_device, dtype=self.model_dtype)
 
     def _ensure_img_context_token_id(self) -> int:
         token_id = self.tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
         unk_id = self.tokenizer.unk_token_id
         if token_id is None or token_id < 0:
-            raise RuntimeError(
-                "Tokenizer does not provide <IMG_CONTEXT> token id.")
+            raise RuntimeError("Tokenizer does not provide <IMG_CONTEXT> token id.")
         if unk_id is not None and token_id == unk_id:
             raise RuntimeError(
-                "<IMG_CONTEXT> resolves to unk_token_id; tokenizer/model pair is incompatible for manual InternVL forward."
+                "<IMG_CONTEXT> resolves to unk_token_id; tokenizer/model pair is incompatible."
             )
-
         setattr(self.model, "img_context_token_id", int(token_id))
         return int(token_id)
 
-    def _get_expected_image_token_count(self,
-                                        pixel_values: torch.Tensor) -> int:
-        # Prefer deriving from the actual visual features so token count matches vit_embeds.
-        extract_feature = getattr(self.model, "extract_feature", None)
-        if callable(extract_feature):
-            with torch.inference_mode():
-                vit_embeds = extract_feature(pixel_values)
-            if not isinstance(vit_embeds, torch.Tensor):
+    def _flatten_visual_features(self, visual_features: torch.Tensor) -> torch.Tensor:
+        if visual_features.ndim == 3:
+            if visual_features.shape[0] != 1:
                 raise RuntimeError(
-                    "model.extract_feature did not return a tensor.")
-
-            if vit_embeds.ndim == 3:
-                return int(vit_embeds.shape[1])
-            if vit_embeds.ndim == 2:
-                return int(vit_embeds.shape[0])
-
+                    f"Expected a single image batch, got shape {tuple(visual_features.shape)}"
+                )
+            visual_features = visual_features[0]
+        if visual_features.ndim != 2:
             raise RuntimeError(
-                f"Unexpected vit_embeds rank={vit_embeds.ndim}, shape={tuple(vit_embeds.shape)}"
+                f"Expected visual features rank 2 after flattening, got shape {tuple(visual_features.shape)}"
             )
+        return visual_features
 
-        fallback = getattr(self.model, "num_image_token", None)
-        if isinstance(fallback, int) and fallback > 0:
-            return fallback
+    def _extract_visual_features(self, image: Any) -> torch.Tensor:
+        pixel_values = self._prepare_pixel_values(image)
+        with torch.inference_mode():
+            visual_features = self.model.extract_feature(pixel_values)
+        visual_features = self._flatten_visual_features(visual_features)
+        return visual_features.to(self.text_device)
 
-        raise RuntimeError(
-            "Cannot infer expected image token count; model has neither extract_feature nor valid num_image_token."
+    def _format_choices_block(self, choices: list[str] | None) -> str:
+        if not choices:
+            return ""
+        return "Choices:\n" + "\n".join(f"- {choice}" for choice in choices)
+
+    def _build_reasoning_prompt(
+        self,
+        state: dict[str, Any],
+        reflection_instruction: str | None = None,
+    ) -> str:
+        prompt_cfg = state["prompt_cfg"]
+        pieces = []
+        system_prompt = prompt_cfg.get("system")
+        if system_prompt:
+            pieces.append(f"System: {system_prompt}")
+        pieces.append("User:")
+        pieces.append("<image>")
+        pieces.append(f"Question: {state['question']}")
+        choices_block = self._format_choices_block(state["choices"])
+        if choices_block:
+            pieces.append(choices_block)
+        if state["reasoning_steps"]:
+            pieces.append("Reasoning so far:")
+            for idx, step in enumerate(state["reasoning_steps"], start=1):
+                pieces.append(f"{idx}. {step}")
+        instruction = reflection_instruction or prompt_cfg.get(
+            "think_instruction",
+            "Think step by step before giving the final answer.",
+        )
+        pieces.append(f"Instruction: {instruction}")
+        pieces.append(
+            "Write exactly one new reasoning step and wrap it in "
+            "<reasoning_step>...</reasoning_step>. Do not give the final answer."
+        )
+        pieces.append("Assistant:")
+        return "\n".join(pieces)
+
+    def _build_answer_prompt(self, state: dict[str, Any]) -> str:
+        prompt_cfg = state["prompt_cfg"]
+        pieces = []
+        system_prompt = prompt_cfg.get("system")
+        if system_prompt:
+            pieces.append(f"System: {system_prompt}")
+        pieces.append("User:")
+        pieces.append("<image>")
+        pieces.append(f"Question: {state['question']}")
+        choices_block = self._format_choices_block(state["choices"])
+        if choices_block:
+            pieces.append(choices_block)
+        if state["reasoning_steps"]:
+            pieces.append("Reasoning:")
+            for idx, step in enumerate(state["reasoning_steps"], start=1):
+                pieces.append(f"{idx}. {step}")
+        if state["choices"]:
+            pieces.append(
+                "Select the best option from the provided choices and copy it exactly."
+            )
+        else:
+            pieces.append("Provide the shortest correct final answer.")
+        pieces.append("Return the final answer as <answer>...</answer>.")
+        pieces.append("Assistant:")
+        return "\n".join(pieces)
+
+    def _build_prompt_with_image_tokens(
+        self,
+        prompt: str,
+        visual_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        img_context_token_id = self._ensure_img_context_token_id()
+        visual_features = self._flatten_visual_features(visual_features).to(
+            self.text_device,
+            dtype=self.model_dtype,
+        )
+        num_visual_tokens = int(visual_features.shape[0])
+        image_token_block = "<img>" + ("<IMG_CONTEXT>" * num_visual_tokens) + "</img>"
+        prompt_text = prompt if "<image>" in prompt else f"<image>\n{prompt}"
+        prompt_text = prompt_text.replace("<image>", image_token_block, 1)
+
+        tokenized = self.tokenizer(prompt_text, return_tensors="pt")
+        input_ids = tokenized["input_ids"].to(self.text_device)
+        attention_mask = tokenized.get("attention_mask")
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, device=self.text_device)
+        else:
+            attention_mask = attention_mask.to(self.text_device)
+
+        input_embeds = self._get_input_embeddings()(input_ids).clone()
+        selected = input_ids.reshape(-1) == img_context_token_id
+        if int(selected.sum().item()) != num_visual_tokens:
+            raise RuntimeError(
+                "Prompt/image token mismatch: "
+                f"found {int(selected.sum().item())} image tokens, expected {num_visual_tokens}."
+            )
+        flat_embeds = input_embeds.reshape(-1, input_embeds.shape[-1])
+        flat_embeds[selected] = visual_features.reshape(-1, flat_embeds.shape[-1]).to(
+            flat_embeds.dtype)
+        input_embeds = flat_embeds.reshape_as(input_embeds)
+        return input_ids, attention_mask, input_embeds
+
+    def _forward_sequence(
+        self,
+        input_ids: torch.Tensor,
+        visual_features: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+    ):
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, device=self.text_device)
+        input_embeds = self._get_input_embeddings()(input_ids.to(self.text_device)).clone()
+        img_context_token_id = self._ensure_img_context_token_id()
+        selected = input_ids.reshape(-1).to(self.text_device) == img_context_token_id
+        flat_embeds = input_embeds.reshape(-1, input_embeds.shape[-1])
+        flat_embeds[selected] = self._flatten_visual_features(visual_features).to(
+            self.text_device,
+            dtype=flat_embeds.dtype,
+        )
+        input_embeds = flat_embeds.reshape_as(input_embeds)
+        return self.language_model(
+            inputs_embeds=input_embeds,
+            attention_mask=attention_mask.to(self.text_device),
+            use_cache=False,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
         )
 
-    def get_next_token_logits(
-            self,
-            question: str,
-            image: Any,
-            choices: list[str] | None = None) -> torch.Tensor:
-        """Run exactly one forward pass and return next-token logits [B, vocab]."""
-        prompt, pixel_values = self.prepare_inputs(question, image, choices)
-        model_inputs = self._build_single_forward_inputs(prompt, pixel_values)
+    def _sample_next_token(
+        self,
+        logits: torch.Tensor,
+        temperature: float,
+        top_k: int | None,
+    ) -> torch.Tensor:
+        if temperature <= 0.0:
+            return torch.argmax(logits, dim=-1, keepdim=True)
 
-        self.model.eval()
+        step_logits = logits / temperature
+        if top_k is not None and top_k > 0:
+            k = min(top_k, step_logits.shape[-1])
+            top_vals, top_idx = torch.topk(step_logits, k=k, dim=-1)
+            probs = torch.softmax(top_vals, dim=-1)
+            sampled = torch.multinomial(probs, num_samples=1)
+            return top_idx.gather(-1, sampled)
+
+        probs = torch.softmax(step_logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1)
+
+    def _trim_on_stop_strings(self, text: str, stop_strings: list[str]) -> str:
+        trimmed = text
+        for stop_string in stop_strings:
+            if stop_string in trimmed:
+                trimmed = trimmed.split(stop_string, 1)[0]
+        return trimmed
+
+    def _decode_new_tokens(
+        self,
+        prompt: str,
+        visual_features: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int | None,
+        stop_strings: list[str],
+    ) -> tuple[str, torch.Tensor, torch.Tensor]:
+        prefix_ids, attention_mask, prefix_embeds = self._build_prompt_with_image_tokens(
+            prompt,
+            visual_features,
+        )
+        generated_tokens: list[torch.Tensor] = []
+        past_key_values = None
+        step_input_ids: torch.Tensor | None = None
+        step_input_embeds: torch.Tensor | None = prefix_embeds
+        running_attention = attention_mask
+        stop_token_ids = {
+            token_id
+            for token_id in [
+                self.tokenizer.eos_token_id,
+                self.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+            ]
+            if token_id is not None and token_id >= 0
+        }
+
         with torch.inference_mode():
-            try:
-                outputs = self.model(**model_inputs)
-            except TypeError:
-                # Compatibility fallback for variants that do not expose image_flags.
-                fallback_inputs = dict(model_inputs)
-                fallback_inputs.pop("image_flags", None)
-                outputs = self.model(**fallback_inputs)
+            for _ in range(max_new_tokens):
+                kwargs: dict[str, Any] = {
+                    "attention_mask": running_attention,
+                    "use_cache": True,
+                    "return_dict": True,
+                }
+                if past_key_values is None:
+                    kwargs["inputs_embeds"] = step_input_embeds
+                else:
+                    kwargs["input_ids"] = step_input_ids
+                    kwargs["past_key_values"] = past_key_values
 
-        return outputs.logits[:, -1, :]
+                outputs = self.language_model(**kwargs)
+                logits = outputs.logits[:, -1, :]
+                next_token = self._sample_next_token(logits, temperature, top_k)
+                generated_tokens.append(next_token)
+                past_key_values = outputs.past_key_values
+                step_input_ids = next_token
+                step_input_embeds = None
 
-    def encode_image(self, image: Any) -> np.ndarray:
-        # Placeholder visual tokens with shape [N, d].
-        rng = np.random.default_rng(0)
-        return rng.standard_normal((64, 128)).astype(np.float32)
+                ones = torch.ones_like(next_token, dtype=running_attention.dtype)
+                running_attention = torch.cat([running_attention, ones], dim=-1)
 
-    def start_reasoning(self, question: str, image: Any,
-                        prompt_cfg: dict[str, Any]) -> dict[str, Any]:
+                decoded = self.tokenizer.decode(
+                    torch.cat(generated_tokens, dim=-1)[0],
+                    skip_special_tokens=False,
+                )
+                if any(stop_string in decoded for stop_string in stop_strings):
+                    break
+                if stop_token_ids and int(next_token.item()) in stop_token_ids:
+                    break
+
+        if generated_tokens:
+            generated_ids = torch.cat(generated_tokens, dim=-1)
+            decoded = self.tokenizer.decode(generated_ids[0], skip_special_tokens=False)
+        else:
+            generated_ids = torch.empty((1, 0), dtype=prefix_ids.dtype, device=self.text_device)
+            decoded = ""
+        return self._trim_on_stop_strings(decoded, stop_strings), prefix_ids, generated_ids
+
+    def _extract_generated_hidden_states(
+        self,
+        prefix_ids: torch.Tensor,
+        generated_ids: torch.Tensor,
+        visual_features: torch.Tensor,
+    ) -> torch.Tensor:
+        if generated_ids.numel() == 0:
+            hidden_size = self._get_hidden_size()
+            return torch.zeros((1, hidden_size), dtype=torch.float32)
+
+        full_input_ids = torch.cat([prefix_ids, generated_ids.to(prefix_ids.device)], dim=-1)
+        full_attention = torch.ones_like(full_input_ids, device=self.text_device)
+        outputs = self._forward_sequence(
+            full_input_ids.to(self.text_device),
+            visual_features,
+            attention_mask=full_attention,
+            output_hidden_states=True,
+        )
+        hidden_states = outputs.hidden_states[-1][:, prefix_ids.shape[-1]:, :]
+        return hidden_states.squeeze(0).detach().to(torch.float32).cpu()
+
+    def _extract_reasoning_step_text(self, raw_text: str) -> str:
+        matches = REASONING_TAG_RE.findall(raw_text)
+        if matches:
+            return matches[-1].strip()
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+        return raw_text.strip()
+
+    def _next_token_probs(
+        self,
+        prompt: str,
+        visual_features: torch.Tensor,
+        top_k: int = 8,
+    ) -> np.ndarray:
+        input_ids, attention_mask, input_embeds = self._build_prompt_with_image_tokens(
+            prompt,
+            visual_features,
+        )
+        with torch.inference_mode():
+            outputs = self.language_model(
+                inputs_embeds=input_embeds,
+                attention_mask=attention_mask,
+                use_cache=False,
+                return_dict=True,
+            )
+        logits = outputs.logits[:, -1, :]
+        k = min(top_k, logits.shape[-1])
+        top_values, _ = torch.topk(logits, k=k, dim=-1)
+        probs = torch.softmax(top_values, dim=-1)[0].detach().cpu().numpy()
+        return probs.astype(np.float32)
+
+    def _score_choice_candidates(
+        self,
+        prompt: str,
+        visual_features: torch.Tensor,
+        choices: list[str],
+    ) -> np.ndarray:
+        prefix_ids, _, _ = self._build_prompt_with_image_tokens(prompt, visual_features)
+        prefix_len = prefix_ids.shape[-1]
+        scores: list[float] = []
+
+        for choice in choices:
+            candidate = f"<answer>{choice}</answer>"
+            candidate_ids = self.tokenizer(
+                candidate,
+                add_special_tokens=False,
+                return_tensors="pt",
+            )["input_ids"].to(self.text_device)
+            full_input_ids = torch.cat([prefix_ids, candidate_ids], dim=-1)
+            full_attention = torch.ones_like(full_input_ids, device=self.text_device)
+            outputs = self._forward_sequence(
+                full_input_ids,
+                visual_features,
+                attention_mask=full_attention,
+                output_hidden_states=False,
+            )
+            logits = outputs.logits[:, prefix_len - 1:-1, :]
+            target_ids = full_input_ids[:, prefix_len:]
+            log_probs = torch.log_softmax(logits, dim=-1)
+            token_scores = log_probs.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)
+            scores.append(float(token_scores.sum().item()))
+
+        score_tensor = torch.tensor(scores, dtype=torch.float32)
+        probs = torch.softmax(score_tensor, dim=0).cpu().numpy()
+        return probs.astype(np.float32)
+
+    def _default_prompt_cfg(self) -> dict[str, Any]:
         return {
-            "question": question,
+            "system": self.model_cfg.get("system_prompt", ""),
+            "think_instruction": "Think step by step before giving the final answer.",
+            "reflection_instruction": "Wait. Think more carefully using visual evidence.",
+        }
+
+    def _resolve_generation_cfg(self, state: dict[str, Any]) -> dict[str, Any]:
+        generation_cfg = dict(state.get("generation_cfg", {}))
+        if "max_new_tokens" not in generation_cfg:
+            generation_cfg["max_new_tokens"] = 128
+        if "temperature" not in generation_cfg:
+            generation_cfg["temperature"] = 0.0
+        if "top_k" not in generation_cfg:
+            generation_cfg["top_k"] = None
+        if "reasoning_step_tokens" not in generation_cfg:
+            generation_cfg["reasoning_step_tokens"] = max(
+                32,
+                min(128, int(generation_cfg["max_new_tokens"]) // 4),
+            )
+        if "answer_max_new_tokens" not in generation_cfg:
+            generation_cfg["answer_max_new_tokens"] = min(
+                64,
+                int(generation_cfg["max_new_tokens"]),
+            )
+        return generation_cfg
+
+    def start_reasoning(
+        self,
+        question: str,
+        image: Any,
+        choices: list[str] | None,
+        prompt_cfg: dict[str, Any],
+    ) -> dict[str, Any]:
+        visual_features = self._extract_visual_features(image)
+        return {
+            "question": self._normalize_question(question),
             "image": image,
-            "prompt_cfg": prompt_cfg,
-            "history": [],
+            "choices": self._normalize_choices(choices),
+            "prompt_cfg": dict(prompt_cfg),
+            "visual_features": visual_features,
+            "visual_tokens": visual_features.detach().cpu().numpy().astype(np.float32),
+            "current_visual_features": visual_features,
+            "reasoning_steps": [],
+            "last_reasoning_embeddings": None,
+            "raw_reasoning_steps": [],
+            "raw_final_answer": "",
+            "generation_cfg": {},
         }
 
     def generate_reasoning_step(
@@ -201,250 +517,79 @@ class InternVL(BaseModelWrapper):
         extra_visual_tokens: Any | None = None,
         reflection_instruction: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        k = len(state["history"]) + 1
-        prefix = "Reflect" if reflection_instruction else "Think"
-        extra = " with visual refocus" if extra_visual_tokens is not None else ""
-        step_text = f"{prefix} step {k}{extra}."
-        state["history"].append(step_text)
+        generation_cfg = self._resolve_generation_cfg(state)
+        visual_features = extra_visual_tokens
+        if visual_features is None:
+            visual_features = state["visual_features"]
+        visual_features = self._flatten_visual_features(
+            torch.as_tensor(visual_features, device=self.text_device)
+        ).to(self.model_dtype)
+
+        prompt = self._build_reasoning_prompt(state, reflection_instruction)
+        raw_text, prefix_ids, generated_ids = self._decode_new_tokens(
+            prompt=prompt,
+            visual_features=visual_features,
+            max_new_tokens=int(generation_cfg["reasoning_step_tokens"]),
+            temperature=float(generation_cfg["temperature"]),
+            top_k=generation_cfg.get("top_k"),
+            stop_strings=["</reasoning_step>"],
+        )
+        step_text = self._extract_reasoning_step_text(raw_text)
+        reasoning_embeddings = self._extract_generated_hidden_states(
+            prefix_ids,
+            generated_ids,
+            visual_features,
+        )
+
+        state["current_visual_features"] = visual_features
+        state["raw_reasoning_steps"].append(raw_text)
+        state["reasoning_steps"].append(step_text)
+        state["last_reasoning_embeddings"] = reasoning_embeddings.numpy()
         return step_text, state
 
-    def get_reasoning_text_embeddings(self, state: dict[str,
-                                                        Any]) -> np.ndarray:
-        # Placeholder z_k embeddings [T_k, d].
-        rng = np.random.default_rng(len(state["history"]))
-        return rng.standard_normal((32, 128)).astype(np.float32)
+    def extract_reasoning_embeddings(self, state: dict[str, Any]) -> np.ndarray:
+        embeddings = state.get("last_reasoning_embeddings")
+        if embeddings is None:
+            hidden_size = self._get_hidden_size()
+            return np.zeros((1, hidden_size), dtype=np.float32)
+        return np.asarray(embeddings, dtype=np.float32)
 
-    def get_answer_distribution(self, state: dict[str, Any]) -> np.ndarray:
-        # Placeholder 4-way answer distribution.
-        probs = np.array([0.7, 0.1, 0.1, 0.1], dtype=np.float32)
-        return probs / probs.sum()
-
-    def generate_final_answer(self, state: dict[str, Any]) -> str:
-        return "placeholder_answer"
-
-    def get_single_token_id(
+    def estimate_answer_distribution(
         self,
-        token_text: str = "Wait",
-        extra_candidates: list[str] | None = None,
-    ) -> int:
-        """Resolve a text into one tokenizer id, trying common whitespace variants."""
-        candidates: list[str] = [
-            f" {token_text}",
-            token_text,
-            token_text.lower(),
-            token_text.upper(),
-        ]
-        if extra_candidates:
-            candidates = list(extra_candidates) + candidates
+        state: dict[str, Any],
+        choices: list[str] | None = None,
+    ) -> np.ndarray:
+        resolved_choices = self._normalize_choices(choices) or state["choices"]
+        prompt = self._build_answer_prompt(state)
+        visual_features = state.get("current_visual_features", state["visual_features"])
 
-        seen: set[str] = set()
-        for candidate in candidates:
-            if candidate in seen:
-                continue
-            seen.add(candidate)
+        if resolved_choices:
+            return self._score_choice_candidates(prompt, visual_features, resolved_choices)
+        return self._next_token_probs(prompt, visual_features)
 
-            ids = self.tokenizer.encode(candidate, add_special_tokens=False)
-            if len(ids) == 1:
-                token_id = int(ids[0])
-                decoded = self.tokenizer.decode([token_id])
-                if decoded.replace(" ", "") == candidate.replace(" ", ""):
-                    print(
-                        f"[get_single_token_id] candidate={repr(candidate)} -> id={token_id} -> decoded={repr(decoded)}"
-                    )
-                    return token_id
-                print(
-                    f"[get_single_token_id] candidate={repr(candidate)} -> id={token_id} but decoded={repr(decoded)}; skipped"
-                )
-
-        raise ValueError(
-            f"Could not map token_text={token_text!r} to a single token id. "
-            "Try passing extra_candidates (e.g. variants with leading spaces)."
-        )
-
-    def _get_replaceable_stop_token_ids(self) -> set[int]:
-        stop_token_ids: set[int] = set()
-
-        eos_token_id = self.tokenizer.eos_token_id
-        if eos_token_id is not None:
-            stop_token_ids.add(int(eos_token_id))
-
-        im_end_token_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
-        if im_end_token_id is not None and im_end_token_id >= 0:
-            stop_token_ids.add(int(im_end_token_id))
-
-        return stop_token_ids
-
-    def _build_token_hook_processor(
+    def generate_final_answer(
         self,
-        token_hook: Callable[[dict[str, Any]], torch.Tensor | None] | None,
-    ) -> LogitsProcessorList | None:
-        if token_hook is None:
-            return None
-
-        tokenizer = self.tokenizer
-
-        class _TokenHookProcessor(LogitsProcessor):
-
-            def __init__(self) -> None:
-                self.step = 0
-
-            def __call__(
-                self,
-                input_ids: torch.LongTensor,
-                scores: torch.FloatTensor,
-            ) -> torch.FloatTensor:
-                result = token_hook({
-                    "step": self.step,
-                    "input_ids": input_ids,
-                    "logits": scores,
-                    "tokenizer": tokenizer,
-                })
-                self.step += 1
-
-                if result is None:
-                    return scores
-
-                if not isinstance(result, torch.Tensor):
-                    raise TypeError(
-                        "token_hook must return None or a torch.Tensor")
-                if result.shape != scores.shape:
-                    raise ValueError(
-                        f"token_hook returned shape {tuple(result.shape)}, expected {tuple(scores.shape)}"
-                    )
-
-                return result
-
-        return LogitsProcessorList([_TokenHookProcessor()])
-
-    def generate_per_token(
-        self,
-        question: str,
-        image: Any,
-        max_new_tokens: int = 128,
-        temperature: float = 0.0,
-        top_k: int | None = None,
-        token_hook: Callable[[dict[str, Any]], torch.Tensor | None]
-        | None = None,
-        force_wait_before_max: bool = False,
-        wait_token_text: str = "Wait",
-        wait_token_candidates: list[str] | None = None,
-        replace_only_when_eos_is_argmax: bool = True,
+        state: dict[str, Any],
+        choices: list[str] | None = None,
     ) -> str:
-        prompt, pixel_values = self.prepare_inputs(question, image)
-        self.model.eval()
+        resolved_choices = self._normalize_choices(choices) or state["choices"]
+        if resolved_choices is not None:
+            state["choices"] = resolved_choices
 
-        model_inputs = self._build_single_forward_inputs(prompt, pixel_values)
-        generated = model_inputs["input_ids"]
-        attention_mask = model_inputs.get("attention_mask")
-        image_flags = model_inputs.get("image_flags")
-
-        eos_token_id = self.tokenizer.eos_token_id
-        stop_token_ids = self._get_replaceable_stop_token_ids()
-        wait_token_id: int | None = None
-        if force_wait_before_max:
-            if eos_token_id is None:
-                raise RuntimeError(
-                    "Tokenizer has no eos_token_id; cannot replace EOS with Wait."
-                )
-            wait_token_id = self.get_single_token_id(
-                token_text=wait_token_text,
-                extra_candidates=wait_token_candidates,
-            )
-            print(
-                "force_wait_before_max is enabled: will replace stop token ids "
-                f"{sorted(stop_token_ids)} with wait_token_id {wait_token_id} until the final step."
-            )
-
-        generated_new_tokens: list[torch.Tensor] = []
-
-        with torch.inference_mode():
-            for step in range(max_new_tokens):
-                forward_inputs: dict[str, Any] = {
-                    "input_ids": generated,
-                    "attention_mask": attention_mask,
-                    "pixel_values": pixel_values,
-                    "image_flags": image_flags,
-                    "use_cache": False,
-                }
-                try:
-                    outputs = self.model(**forward_inputs)
-                except TypeError:
-                    fallback_inputs = dict(forward_inputs)
-                    fallback_inputs.pop("image_flags", None)
-                    outputs = self.model(**fallback_inputs)
-                logits = outputs.logits[:, -1, :]
-
-                if token_hook is not None:
-                    maybe_logits = token_hook({
-                        "step": step,
-                        "input_ids": generated,
-                        "logits": logits,
-                        "tokenizer": self.tokenizer,
-                    })
-                    if maybe_logits is not None:
-                        if not isinstance(maybe_logits, torch.Tensor):
-                            raise TypeError(
-                                "token_hook must return None or a torch.Tensor"
-                            )
-                        if maybe_logits.shape != logits.shape:
-                            raise ValueError(
-                                f"token_hook returned shape {tuple(maybe_logits.shape)}, expected {tuple(logits.shape)}"
-                            )
-                        logits = maybe_logits
-
-                if temperature <= 0.0:
-                    next_token = torch.argmax(logits, dim=-1, keepdim=True)
-                else:
-                    step_logits = logits / temperature
-                    if top_k is not None and top_k > 0:
-                        k = min(top_k, step_logits.shape[-1])
-                        top_vals, top_idx = torch.topk(step_logits,
-                                                       k=k,
-                                                       dim=-1)
-                        probs = torch.softmax(top_vals, dim=-1)
-                        sampled = torch.multinomial(probs, num_samples=1)
-                        next_token = top_idx.gather(-1, sampled)
-                    else:
-                        probs = torch.softmax(step_logits, dim=-1)
-                        next_token = torch.multinomial(probs, num_samples=1)
-
-                if (force_wait_before_max and wait_token_id is not None
-                        and stop_token_ids):
-                    if step < max_new_tokens - 1:
-                        stop_mask = torch.zeros_like(next_token.squeeze(-1),
-                                                     dtype=torch.bool)
-                        for stop_token_id in stop_token_ids:
-                            stop_mask |= next_token.squeeze(
-                                -1) == stop_token_id
-                        if torch.any(stop_mask):
-                            next_token[stop_mask, 0] = wait_token_id
-
-                generated = torch.cat([generated, next_token], dim=-1)
-                generated_new_tokens.append(next_token)
-
-                if attention_mask is not None:
-                    ones = torch.ones_like(next_token,
-                                           dtype=attention_mask.dtype)
-                    attention_mask = torch.cat([attention_mask, ones], dim=-1)
-
-                if eos_token_id is not None and torch.all(
-                        next_token == eos_token_id):
-                    print(
-                        f"EOS token id {eos_token_id} detected at step {step}")
-                    break
-
-        if not generated_new_tokens:
-            return ""
-
-        new_token_ids = torch.cat(generated_new_tokens, dim=-1)
-        token_list = new_token_ids[0].cpu().tolist()
-        print(
-            f"[generate_per_token] Generated {len(token_list)} tokens: {token_list}"
+        generation_cfg = self._resolve_generation_cfg(state)
+        prompt = self._build_answer_prompt(state)
+        visual_features = state.get("current_visual_features", state["visual_features"])
+        raw_text, _, _ = self._decode_new_tokens(
+            prompt=prompt,
+            visual_features=visual_features,
+            max_new_tokens=int(generation_cfg["answer_max_new_tokens"]),
+            temperature=float(generation_cfg["temperature"]),
+            top_k=generation_cfg.get("top_k"),
+            stop_strings=["</answer>"],
         )
-        decoded = self.tokenizer.decode(new_token_ids[0],
-                                        skip_special_tokens=False)
-        print(f"[generate_per_token] Decoded output: {repr(decoded)}")
-        return decoded
+        state["raw_final_answer"] = raw_text
+        final_answer = extract_answer_text(raw_text)
+        return final_answer or raw_text.strip()
 
     def generate_full_answer(
         self,
@@ -454,53 +599,17 @@ class InternVL(BaseModelWrapper):
         max_new_tokens: int = 128,
         temperature: float = 0.0,
         top_k: int | None = None,
-        token_hook: Callable[[dict[str, Any]], torch.Tensor | None]
-        | None = None,
     ) -> str:
-
-        prompt, pixel_values = self.prepare_inputs(question, image, choices)
-        self.model.eval()
-
-        do_sample = temperature > 0.0
-        generation_config: dict[str, Any] = {
+        state = self.start_reasoning(
+            question=question,
+            image=image,
+            choices=choices,
+            prompt_cfg=self._default_prompt_cfg(),
+        )
+        state["generation_cfg"] = {
             "max_new_tokens": max_new_tokens,
-            "do_sample": do_sample,
+            "answer_max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_k": top_k,
         }
-        if do_sample:
-            generation_config["temperature"] = temperature
-            if top_k is not None:
-                generation_config["top_k"] = top_k
-
-        logits_processor = self._build_token_hook_processor(token_hook)
-        if logits_processor is not None:
-            generation_config["logits_processor"] = logits_processor
-
-        with torch.inference_mode():
-            # Prefer InternVL's chat API because it injects image context tokens correctly.
-            if hasattr(self.model, "chat"):
-                try:
-                    return self.model.chat(
-                        self.tokenizer,
-                        pixel_values,
-                        prompt,
-                        generation_config,
-                        num_patches_list=[pixel_values.shape[0]],
-                    )
-                except TypeError:
-                    return self.model.chat(
-                        self.tokenizer,
-                        pixel_values,
-                        prompt,
-                        generation_config,
-                    )
-
-            # Fallback for variants without `chat`.
-            tokenized = self.tokenizer(prompt,
-                                       return_tensors="pt").to(self.device)
-            output_ids = self.model.generate(
-                **tokenized,
-                pixel_values=pixel_values,
-                **generation_config,
-            )
-            return self.tokenizer.decode(output_ids[0],
-                                         skip_special_tokens=True)
+        return self.generate_final_answer(state, choices)

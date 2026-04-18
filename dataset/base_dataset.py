@@ -51,7 +51,7 @@ class BaseVQADataset(ABC):
 
         return {
             "id":
-            row.get("id", idx),
+            row.get("id", row.get("pid", idx)),
             # "image": row[self.image_key],
             "image":
             (str(self.root /
