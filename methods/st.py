@@ -47,6 +47,8 @@ def run_st(sample: dict[str, Any], model_wrapper,
             break
 
     pred = model_wrapper.generate_final_answer(state, choices)
+    logger.info("[ST] sample_id=%s final_answer=%s gold_answer=%s steps_used=%d latency_sec=%.2f",
+                sample.get("id"), pred, sample["answer"], step, time.perf_counter() - start)
     latency = time.perf_counter() - start
 
     return {
