@@ -9,6 +9,7 @@ from PIL import Image
 import torch
 from torchvision import transforms
 from transformers import AutoModel, AutoTokenizer
+from transformers.modeling_utils import PreTrainedModel  # ADD THIS
 
 from eval.metrics import extract_answer_text
 
@@ -49,6 +50,28 @@ class InternVL(BaseModelWrapper):
                 "clear the cached model directory and re-download. "
                 f"Original error: {exc}"
             ) from exc
+
+        # ── Monkey-patch fix for `all_tied_weights_keys` AttributeError ──────
+        # Newer transformers versions call post_init() which sets up
+        # all_tied_weights_keys, but InternVLChatModel doesn't call it.
+        # We patch the class at runtime to avoid touching library files.
+        try:
+            from transformers.dynamic_module_utils import get_class_from_dynamic_module
+            _InternVLChatModel = get_class_from_dynamic_module(
+                "modeling_internvl_chat.InternVLChatModel",
+                model_cfg["hf_repo_or_local_path"],
+            )
+            if not getattr(_InternVLChatModel, "_post_init_patched", False):
+                _original_init = _InternVLChatModel.__init__
+                def _patched_init(self, *args, **kwargs):
+                    _original_init(self, *args, **kwargs)
+                    PreTrainedModel.post_init(self)
+                _InternVLChatModel.__init__ = _patched_init
+                _InternVLChatModel._post_init_patched = True
+                logger.debug("Applied post_init patch to InternVLChatModel.")
+        except Exception as patch_exc:
+            logger.debug("Could not apply InternVLChatModel patch (will rely on fallback): %s", patch_exc)
+        # ─────────────────────────────────────────────────────────────────────
 
         device_map = model_cfg.get("device_map")
         resolved_device_map = device_map
