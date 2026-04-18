@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+import logging
 
 import numpy as np
 from PIL import Image
@@ -18,6 +19,8 @@ REASONING_TAG_RE = re.compile(
     r"<reasoning_step>\s*(.*?)\s*</reasoning_step>",
     re.IGNORECASE | re.DOTALL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InternVL(BaseModelWrapper):
@@ -48,14 +51,42 @@ class InternVL(BaseModelWrapper):
             ) from exc
 
         device_map = model_cfg.get("device_map")
-        self.model = AutoModel.from_pretrained(
-            model_cfg["hf_repo_or_local_path"],
-            torch_dtype=self.model_dtype,
-            trust_remote_code=True,
-            low_cpu_mem_usage=True,
-            device_map=device_map,
-        )
-        if device_map in (None, "", "none"):
+        resolved_device_map = device_map
+        model_load_kwargs = {
+            "torch_dtype": self.model_dtype,
+            "trust_remote_code": True,
+            "low_cpu_mem_usage": True,
+            "device_map": device_map,
+        }
+
+        try:
+            self.model = AutoModel.from_pretrained(
+                model_cfg["hf_repo_or_local_path"],
+                **model_load_kwargs,
+            )
+        except (AttributeError, ValueError) as exc:
+            message = str(exc)
+            fallback_needed = (
+                "all_tied_weights_keys" in message
+                or "requires `accelerate`" in message.lower()
+            )
+            if fallback_needed and device_map not in (None, "", "none"):
+                logger.warning(
+                    "Model loading with device_map=%s failed (%s). "
+                    "Retrying with device_map=None.",
+                    device_map,
+                    exc,
+                )
+                model_load_kwargs["device_map"] = None
+                resolved_device_map = None
+                self.model = AutoModel.from_pretrained(
+                    model_cfg["hf_repo_or_local_path"],
+                    **model_load_kwargs,
+                )
+            else:
+                raise
+
+        if resolved_device_map in (None, "", "none"):
             self.model = self.model.to(self.device)
         self.model.eval()
 
