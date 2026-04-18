@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from engine.stopping import predictive_entropy, should_stop
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_st(sample: dict[str, Any], model_wrapper,
@@ -27,6 +31,17 @@ def run_st(sample: dict[str, Any], model_wrapper,
         probs = model_wrapper.estimate_answer_distribution(state, choices)
         entropy = predictive_entropy(probs)
         entropy_trace.append(entropy)
+        latest_step = ""
+        reasoning_steps = state.get("reasoning_steps", [])
+        if reasoning_steps:
+            latest_step = str(reasoning_steps[-1]).strip()
+        logger.info(
+            "[ST] sample_id=%s step=%d entropy=%.6f reasoning=%s",
+            sample.get("id"),
+            step,
+            entropy,
+            latest_step,
+        )
         if should_stop(entropy, vis_cfg["entropy_threshold"], step,
                        vis_cfg["max_steps"]):
             break
