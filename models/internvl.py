@@ -64,6 +64,16 @@ class InternVL(BaseModelWrapper):
                 model_cfg["hf_repo_or_local_path"],
                 **model_load_kwargs,
             )
+        except ImportError as exc:
+            message = str(exc)
+            if "Qwen3ForCausalLM" in message:
+                raise RuntimeError(
+                    "InternVL3.5 remote model code requires Transformers with Qwen3 classes. "
+                    "Please install a compatible version, e.g. transformers>=4.52.1,<5.0.0, "
+                    "then clear the HuggingFace dynamic module cache and retry. "
+                    f"Original error: {exc}"
+                ) from exc
+            raise
         except (AttributeError, ValueError, RuntimeError) as exc:
             message = str(exc).lower()
             fallback_needed = (
