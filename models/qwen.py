@@ -247,6 +247,63 @@ class Qwen(BaseModelWrapper):
         )
         return generation_cfg
 
+    def _load_pil_image(self, image: Any) -> Image.Image:
+        if isinstance(image, Image.Image):
+            return image.convert("RGB")
+        if isinstance(image, np.ndarray):
+            arr = image
+            if arr.ndim == 2:
+                pass
+            elif arr.ndim == 3 and arr.shape[-1] in (1, 3, 4):
+                if arr.shape[-1] == 1:
+                    arr = arr.squeeze(-1)
+            else:
+                raise ValueError(
+                    "NumPy image must have shape [H, W] or [H, W, C] with C in {1, 3, 4}."
+                )
+
+            if np.issubdtype(arr.dtype, np.floating):
+                if arr.size and float(arr.max()) <= 1.0:
+                    arr = arr * 255.0
+                arr = np.clip(arr, 0, 255).astype(np.uint8)
+            elif arr.dtype != np.uint8:
+                arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+            return Image.fromarray(arr).convert("RGB")
+        if isinstance(image, (str, os.PathLike)):
+            return Image.open(image).convert("RGB")
+        if isinstance(image, (bytes, bytearray)):
+            return Image.open(io.BytesIO(image)).convert("RGB")
+        raise TypeError(
+            "Unsupported image type. Expected PIL.Image.Image, numpy.ndarray, path-like, or bytes."
+        )
+
+    def _extract_visual_tokens(self, image: Any) -> np.ndarray:
+        pil_image = self._load_pil_image(image)
+        resized = pil_image.resize((224, 224))
+        image_array = np.asarray(resized, dtype=np.float32) / 255.0
+        patch_size = 16
+        hidden_size = int(getattr(getattr(self.model, "config", None), "hidden_size", None) or 768)
+        tokens: list[np.ndarray] = []
+
+        for top in range(0, image_array.shape[0], patch_size):
+            for left in range(0, image_array.shape[1], patch_size):
+                patch = image_array[top : top + patch_size, left : left + patch_size, :]
+                if patch.size == 0:
+                    continue
+                patch_mean = patch.mean(axis=(0, 1))
+                patch_std = patch.std(axis=(0, 1))
+                base_vector = np.concatenate(
+                    [patch_mean, patch_std, np.array([top / 224.0, left / 224.0], dtype=np.float32)]
+                ).astype(np.float32)
+                repeats = int(np.ceil(hidden_size / base_vector.shape[0]))
+                token = np.tile(base_vector, repeats)[:hidden_size].astype(np.float32)
+                tokens.append(token)
+
+        if not tokens:
+            return np.zeros((1, hidden_size), dtype=np.float32)
+        return np.stack(tokens, axis=0)
+
     def _format_extra_visual_tokens_note(self, extra_visual_tokens: Any | None) -> str:
         if extra_visual_tokens is None:
             return ""
@@ -269,14 +326,15 @@ class Qwen(BaseModelWrapper):
         choices: list[str] | None,
         prompt_cfg: dict[str, Any],
     ) -> dict[str, Any]:
+        visual_tokens = self._extract_visual_tokens(image)
         return {
             "question": self._normalize_question(question),
             "image": image,
             "choices": self._normalize_choices(choices),
             "prompt_cfg": dict(prompt_cfg),
-            "visual_features": None,
-            "visual_tokens": None,
-            "current_visual_features": None,
+            "visual_features": visual_tokens,
+            "visual_tokens": visual_tokens,
+            "current_visual_features": visual_tokens,
             "current_visual_tokens": None,
             "reasoning_steps": [],
             "last_reasoning_embeddings": None,
