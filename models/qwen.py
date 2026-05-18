@@ -304,21 +304,6 @@ class Qwen(BaseModelWrapper):
             return np.zeros((1, hidden_size), dtype=np.float32)
         return np.stack(tokens, axis=0)
 
-    def _format_extra_visual_tokens_note(self, extra_visual_tokens: Any | None) -> str:
-        if extra_visual_tokens is None:
-            return ""
-        shape = getattr(extra_visual_tokens, "shape", None)
-        if shape is None:
-            try:
-                shape = (len(extra_visual_tokens),)
-            except TypeError:
-                shape = ()
-        shape_text = "x".join(str(dim) for dim in tuple(shape)) if shape else "unknown"
-        return (
-            "Additional selected visual evidence is available "
-            f"(token shape: {shape_text}). Use it to refine the next reasoning step."
-        )
-
     def start_reasoning(
         self,
         question: str,
@@ -352,9 +337,6 @@ class Qwen(BaseModelWrapper):
         generation_cfg = self._resolve_generation_cfg(state)
         prompt = self._build_reasoning_prompt(state, reflection_instruction)
         if extra_visual_tokens is not None:
-            prompt = "\n".join(
-                [prompt, self._format_extra_visual_tokens_note(extra_visual_tokens)]
-            )
             state["current_visual_tokens"] = extra_visual_tokens
             state["current_visual_features"] = extra_visual_tokens
         raw_text = self.generate_per_token(
