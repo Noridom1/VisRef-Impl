@@ -59,7 +59,8 @@ model:
 
 
 
-  system_prompt: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Answer in the following format: <reasoning> Your reasoning here </reasoning>. <answer> The final answer here.</answer>"
+  system_prompt: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Return exactly one reasoning step in plain text and do not provide the final answer."
+  final_answer_system_prompt: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Provide the final answer only."
 
 
 
@@ -85,7 +86,8 @@ prompt:
 
 
 
-  system: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Answer in the following format: <reasoning> Your reasoning here </reasoning>. <answer> The final answer here.</answer>"
+  system: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Return exactly one reasoning step in plain text and do not provide the final answer."
+  final_answer_system: "You are a helpful visual reasoning assistant. Answer the question based on the image provided. If there are choices, choose the most appropriate one. Provide the final answer only."
 
 
 

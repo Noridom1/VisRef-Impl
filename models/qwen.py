@@ -22,6 +22,7 @@ REASONING_TAG_RE = re.compile(
 )
 ANSWER_TAG_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.IGNORECASE | re.DOTALL)
 IM_END_RE = re.compile(r"<\|im_end\|>")
+THINK_RE = re.compile(r"</?think>", re.IGNORECASE)
 
 
 class Qwen(BaseModelWrapper):
@@ -289,9 +290,7 @@ class Qwen(BaseModelWrapper):
             "think_instruction", "Think step by step before giving the final answer."
         )
         pieces.append(f"Instruction: {instruction}")
-        pieces.append(
-            "Write exactly one new reasoning step and wrap it in <reasoning_step>...</reasoning_step>. Do not give the final answer."
-        )
+        pieces.append("Write exactly one new reasoning step in plain text. Do not give the final answer.")
         pieces.append("Assistant:")
         return "\n".join(pieces)
 
@@ -335,6 +334,7 @@ class Qwen(BaseModelWrapper):
     def _clean_model_text(self, text: str) -> str:
         cleaned = IM_END_RE.sub("", text)
         cleaned = cleaned.replace("<|im_start|>", "")
+        cleaned = THINK_RE.sub("", cleaned)
         return cleaned.strip()
 
     def _tokens_to_aux_image(self, extra_visual_tokens: Any | None) -> Image.Image | None:
@@ -430,7 +430,7 @@ class Qwen(BaseModelWrapper):
         prompt_cfg: dict[str, Any],
     ) -> dict[str, Any]:
         visual_tokens = self._extract_visual_tokens(image)
-        # Build initial chat messages: system, user (image+question+choices), assistant("<reasoning>")
+        # Build initial chat messages: system, user (image+question+choices)
         system_prompt = prompt_cfg.get("system") or self.model_cfg.get("system_prompt")
         messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -450,9 +450,6 @@ class Qwen(BaseModelWrapper):
             qtext = f"Question: {self._normalize_question(question)}"
         user_content.append({"type": "text", "text": qtext})
         messages.append({"role": "user", "content": user_content})
-
-        # assistant placeholder to indicate where reasoning will go
-        messages.append({"role": "assistant", "content": [{"type": "text", "text": "<reasoning>"}]})
 
         return {
             "question": self._normalize_question(question),
@@ -489,7 +486,8 @@ class Qwen(BaseModelWrapper):
         if messages:
             reasoning_system = (
                 "You are a helpful visual reasoning assistant. "
-                "Return exactly one <reasoning_step>...</reasoning_step> and nothing else."
+                "Return exactly one reasoning step in plain text and nothing else. "
+                "Do not output the final answer."
             )
             prompt_cfg = state.get("prompt_cfg") or {}
             think_inst = prompt_cfg.get(
@@ -537,9 +535,8 @@ class Qwen(BaseModelWrapper):
             state["messages"] = []
 
         if step_text:
-            wrapped = f"<reasoning_step>{step_text}</reasoning_step>"
             state["messages"].append(
-                {"role": "assistant", "content": [{"type": "text", "text": wrapped}]}
+                {"role": "assistant", "content": [{"type": "text", "text": step_text}]}
             )
         return step_text, state
 
