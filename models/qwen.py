@@ -49,7 +49,11 @@ class Qwen(BaseModelWrapper):
         self.processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-8B-Thinking")
 
     def prepare_inputs(
-        self, question: str, image: Any, choices: list[str] | None
+        self,
+        question: str,
+        image: Any,
+        choices: list[str] | None,
+        extra_visual_tokens: Any | None = None,
     ) -> dict[str, Any]:
         if isinstance(image, Image.Image):
             pil_image = image.convert("RGB")
@@ -86,6 +90,7 @@ class Qwen(BaseModelWrapper):
             question += " Choices: " + ", ".join(choices)
 
         messages: list[dict[str, Any]] = []
+        aux_image = self._tokens_to_aux_image(extra_visual_tokens)
 
         system_prompt = self.model_cfg.get("system_prompt")
         if system_prompt:
@@ -99,12 +104,12 @@ class Qwen(BaseModelWrapper):
         messages.append(
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": pil_image},
-                    {"type": "text", "text": question},
-                ],
+                "content": [{"type": "image", "image": pil_image}],
             }
         )
+        if aux_image is not None:
+            messages[-1]["content"].append({"type": "image", "image": aux_image})
+        messages[-1]["content"].append({"type": "text", "text": question})
 
         print("Prepared messages for processor:", messages)
 
@@ -126,9 +131,10 @@ class Qwen(BaseModelWrapper):
         max_new_tokens: int = 512,
         temperature: float = 0.0,
         top_k: int | None = None,
+        extra_visual_tokens: Any | None = None,
     ) -> str:
 
-        inputs = self.prepare_inputs(question, image, choices)
+        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
         print("Prepared inputs keys:", list(inputs.keys()))
 
         # Inference: Generation of the output
@@ -247,6 +253,34 @@ class Qwen(BaseModelWrapper):
         )
         return generation_cfg
 
+    def _tokens_to_aux_image(self, extra_visual_tokens: Any | None) -> Image.Image | None:
+        if extra_visual_tokens is None:
+            return None
+
+        if torch.is_tensor(extra_visual_tokens):
+            token_array = extra_visual_tokens.detach().float().cpu().numpy()
+        else:
+            token_array = np.asarray(extra_visual_tokens)
+
+        if token_array.ndim != 2 or token_array.size == 0:
+            return None
+
+        num_tokens, token_dim = token_array.shape
+        side = int(np.ceil(np.sqrt(num_tokens)))
+        rgb = token_array[:, :3]
+        if token_dim < 3:
+            rgb = np.pad(rgb, ((0, 0), (0, 3 - token_dim)), mode="constant")
+
+        rgb = rgb.astype(np.float32)
+        minimum = rgb.min(axis=0, keepdims=True)
+        maximum = rgb.max(axis=0, keepdims=True)
+        scale = np.where((maximum - minimum) > 1e-6, maximum - minimum, 1.0)
+        normalized = ((rgb - minimum) / scale * 255.0).clip(0, 255).astype(np.uint8)
+
+        canvas = np.zeros((side * side, 3), dtype=np.uint8)
+        canvas[:num_tokens] = normalized
+        return Image.fromarray(canvas.reshape(side, side, 3), mode="RGB")
+
     def _load_pil_image(self, image: Any) -> Image.Image:
         if isinstance(image, Image.Image):
             return image.convert("RGB")
@@ -343,6 +377,7 @@ class Qwen(BaseModelWrapper):
             prompt,
             state["image"],
             state.get("choices"),
+            extra_visual_tokens=extra_visual_tokens,
             max_new_tokens=int(generation_cfg["reasoning_step_tokens"]),
             temperature=float(generation_cfg["temperature"]),
             top_k=generation_cfg.get("top_k"),
@@ -380,12 +415,14 @@ class Qwen(BaseModelWrapper):
         resolved_choices = self._normalize_choices(choices) or state.get("choices")
         prompt = self._build_answer_prompt(state)
         gen_cfg = self._resolve_generation_cfg(state)
+        extra_visual_tokens = state.get("current_visual_tokens")
         if resolved_choices:
             # conservative heuristic: generate final answer and compare
             pred = self.generate_full_answer(
                 prompt,
                 state["image"],
                 None,
+                extra_visual_tokens=extra_visual_tokens,
                 max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
                 temperature=float(gen_cfg["temperature"]),
             )
@@ -404,7 +441,10 @@ class Qwen(BaseModelWrapper):
             return probs
         # no choices: return top-k next-token probs
         logits = self.get_next_token_logits(
-            prompt, state["image"], state.get("choices")
+            prompt,
+            state["image"],
+            state.get("choices"),
+            extra_visual_tokens=extra_visual_tokens,
         )
         k = min(8, logits.shape[-1])
         top_vals, _ = torch.topk(logits, k=k, dim=-1)
@@ -425,10 +465,12 @@ class Qwen(BaseModelWrapper):
             state["choices"] = resolved_choices
         gen_cfg = self._resolve_generation_cfg(state)
         prompt = self._build_answer_prompt(state)
+        extra_visual_tokens = state.get("current_visual_tokens")
         raw = self.generate_per_token(
             prompt,
             state["image"],
             state.get("choices"),
+            extra_visual_tokens=extra_visual_tokens,
             max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
             temperature=float(gen_cfg["temperature"]),
             top_k=gen_cfg.get("top_k"),
@@ -442,10 +484,11 @@ class Qwen(BaseModelWrapper):
         question: str,
         image: Any,
         choices: list[str] | None = None,
+        extra_visual_tokens: Any | None = None,
     ) -> torch.Tensor:
         """Run one forward pass and return next-token logits with shape [B, vocab]."""
 
-        inputs = self.prepare_inputs(question, image, choices)
+        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
 
         self.model.eval()
 
@@ -464,10 +507,11 @@ class Qwen(BaseModelWrapper):
         temperature: float = 0.0,
         top_k: int | None = None,
         token_hook: Callable[[dict[str, Any]], torch.Tensor | None] | None = None,
+        extra_visual_tokens: Any | None = None,
     ) -> str:
         """Autoregressive decoding via explicit forward calls at every token step."""
 
-        model_inputs = self.prepare_inputs(question, image, choices)
+        model_inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
 
         tokenizer = self.processor.tokenizer
 
