@@ -54,6 +54,7 @@ class Qwen(BaseModelWrapper):
         image: Any,
         choices: list[str] | None,
         extra_visual_tokens: Any | None = None,
+        assistant_texts: list[str] | None = None,
     ) -> dict[str, Any]:
         if isinstance(image, Image.Image):
             pil_image = image.convert("RGB")
@@ -101,6 +102,11 @@ class Qwen(BaseModelWrapper):
                 }
             )
 
+        # Insert previous assistant reasoning steps as separate assistant messages
+        if assistant_texts:
+            for step in assistant_texts:
+                messages.append({"role": "assistant", "content": [{"type": "text", "text": str(step)}]})
+
         messages.append(
             {
                 "role": "user",
@@ -132,9 +138,10 @@ class Qwen(BaseModelWrapper):
         temperature: float = 0.0,
         top_k: int | None = None,
         extra_visual_tokens: Any | None = None,
+        assistant_texts: list[str] | None = None,
     ) -> str:
 
-        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
+        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens, assistant_texts)
         print("Prepared inputs keys:", list(inputs.keys()))
 
         # Inference: Generation of the output
@@ -187,7 +194,10 @@ class Qwen(BaseModelWrapper):
         }
 
     def _build_reasoning_prompt(
-        self, state: dict[str, Any], reflection_instruction: str | None = None
+        self,
+        state: dict[str, Any],
+        reflection_instruction: str | None = None,
+        include_steps: bool = True,
     ) -> str:
         prompt_cfg = state.get("prompt_cfg") or {}
         pieces = []
@@ -202,7 +212,7 @@ class Qwen(BaseModelWrapper):
             choices_block = "Choices:\n" + "\n".join(f"- {c}" for c in state["choices"])
         if choices_block:
             pieces.append(choices_block)
-        if state.get("reasoning_steps"):
+        if include_steps and state.get("reasoning_steps"):
             pieces.append("Reasoning so far:")
             for idx, step in enumerate(state["reasoning_steps"], start=1):
                 pieces.append(f"{idx}. {step}")
@@ -216,7 +226,7 @@ class Qwen(BaseModelWrapper):
         pieces.append("Assistant:")
         return "\n".join(pieces)
 
-    def _build_answer_prompt(self, state: dict[str, Any]) -> str:
+    def _build_answer_prompt(self, state: dict[str, Any], include_steps: bool = True) -> str:
         prompt_cfg = state.get("prompt_cfg") or {}
         pieces = []
         system_prompt = prompt_cfg.get("system")
@@ -225,7 +235,7 @@ class Qwen(BaseModelWrapper):
         pieces.append("User:")
         pieces.append("<image>")
         pieces.append(f"Question: {state['question']}")
-        if state.get("reasoning_steps"):
+        if include_steps and state.get("reasoning_steps"):
             pieces.append("Reasoning:")
             for idx, step in enumerate(state["reasoning_steps"], start=1):
                 pieces.append(f"{idx}. {step}")
@@ -369,7 +379,8 @@ class Qwen(BaseModelWrapper):
         reflection_instruction: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         generation_cfg = self._resolve_generation_cfg(state)
-        prompt = self._build_reasoning_prompt(state, reflection_instruction)
+        # Build prompt without embedding prior reasoning steps; pass them as assistant messages
+        prompt = self._build_reasoning_prompt(state, reflection_instruction, include_steps=False)
         if extra_visual_tokens is not None:
             state["current_visual_tokens"] = extra_visual_tokens
             state["current_visual_features"] = extra_visual_tokens
@@ -378,6 +389,7 @@ class Qwen(BaseModelWrapper):
             state["image"],
             state.get("choices"),
             extra_visual_tokens=extra_visual_tokens,
+            assistant_texts=list(state.get("reasoning_steps", [])),
             max_new_tokens=int(generation_cfg["reasoning_step_tokens"]),
             temperature=float(generation_cfg["temperature"]),
             top_k=generation_cfg.get("top_k"),
@@ -425,6 +437,7 @@ class Qwen(BaseModelWrapper):
                 extra_visual_tokens=extra_visual_tokens,
                 max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
                 temperature=float(gen_cfg["temperature"]),
+                assistant_texts=list(state.get("reasoning_steps", [])),
             )
             probs = np.full(
                 (len(resolved_choices),), 1.0 / len(resolved_choices), dtype=np.float32
@@ -445,6 +458,7 @@ class Qwen(BaseModelWrapper):
             state["image"],
             state.get("choices"),
             extra_visual_tokens=extra_visual_tokens,
+            assistant_texts=list(state.get("reasoning_steps", [])),
         )
         k = min(8, logits.shape[-1])
         top_vals, _ = torch.topk(logits, k=k, dim=-1)
@@ -464,12 +478,14 @@ class Qwen(BaseModelWrapper):
         if resolved_choices is not None:
             state["choices"] = resolved_choices
         gen_cfg = self._resolve_generation_cfg(state)
-        prompt = self._build_answer_prompt(state)
+        # Build answer prompt without inlining reasoning steps; provide them as assistant messages
+        prompt = self._build_answer_prompt(state, include_steps=False)
         extra_visual_tokens = state.get("current_visual_tokens")
         raw = self.generate_per_token(
             prompt,
             state["image"],
             state.get("choices"),
+            assistant_texts=list(state.get("reasoning_steps", [])),
             extra_visual_tokens=extra_visual_tokens,
             max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
             temperature=float(gen_cfg["temperature"]),
@@ -485,10 +501,11 @@ class Qwen(BaseModelWrapper):
         image: Any,
         choices: list[str] | None = None,
         extra_visual_tokens: Any | None = None,
+        assistant_texts: list[str] | None = None,
     ) -> torch.Tensor:
         """Run one forward pass and return next-token logits with shape [B, vocab]."""
 
-        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
+        inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens, assistant_texts)
 
         self.model.eval()
 
@@ -508,10 +525,11 @@ class Qwen(BaseModelWrapper):
         top_k: int | None = None,
         token_hook: Callable[[dict[str, Any]], torch.Tensor | None] | None = None,
         extra_visual_tokens: Any | None = None,
+        assistant_texts: list[str] | None = None,
     ) -> str:
         """Autoregressive decoding via explicit forward calls at every token step."""
 
-        model_inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens)
+        model_inputs = self.prepare_inputs(question, image, choices, extra_visual_tokens, assistant_texts)
 
         tokenizer = self.processor.tokenizer
 
