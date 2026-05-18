@@ -95,6 +95,8 @@ class Qwen(BaseModelWrapper):
 
         system_prompt = self.model_cfg.get("system_prompt")
 
+        provided_messages = messages is not None
+
         # If explicit messages provided, use them as the base chat history.
         if messages is None:
             messages = []
@@ -109,16 +111,47 @@ class Qwen(BaseModelWrapper):
             # Insert previous assistant reasoning steps as separate assistant messages
             if assistant_texts:
                 for step in assistant_texts:
-                    messages.append({"role": "assistant", "content": [{"type": "text", "text": str(step)}]})
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": str(step)}],
+                        }
+                    )
         else:
             # copy to avoid mutating caller-owned lists
-            messages = [dict(m) for m in messages]
+            copied: list[dict[str, Any]] = []
+            for m in messages:
+                cloned = dict(m)
+                content = m.get("content")
+                if isinstance(content, list):
+                    cloned["content"] = list(content)
+                copied.append(cloned)
+            messages = copied
             # if assistant_texts provided in addition, append them
             if assistant_texts:
                 for step in assistant_texts:
-                    messages.append({"role": "assistant", "content": [{"type": "text", "text": str(step)}]})
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": str(step)}],
+                        }
+                    )
 
-        # Ensure there's a user message to attach the main image + question
+        # Normalize image items inside messages (convert paths/arrays/bytes to PIL)
+        for m in messages:
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "image":
+                    continue
+                try:
+                    item["image"] = self._load_pil_image(item.get("image"))
+                except TypeError:
+                    # Leave as-is if it's already a valid image type for the processor
+                    pass
+
+        # Ensure there's a user message to attach images/text only when we built messages here.
         user_msg_index = None
         for idx, m in enumerate(messages):
             if m.get("role") == "user" and isinstance(m.get("content"), list):
@@ -133,14 +166,20 @@ class Qwen(BaseModelWrapper):
                 }
             )
             user_msg_index = len(messages) - 1
+
+        if provided_messages and user_msg_index is not None:
+            # If caller supplied explicit messages, avoid duplicating question/image text.
+            if aux_image is not None:
+                messages[user_msg_index]["content"].append(
+                    {"type": "image", "image": aux_image}
+                )
         else:
-            # append image to existing user message
             messages[user_msg_index]["content"].append({"type": "image", "image": pil_image})
-
-        if aux_image is not None:
-            messages[user_msg_index]["content"].append({"type": "image", "image": aux_image})
-
-        messages[user_msg_index]["content"].append({"type": "text", "text": question})
+            if aux_image is not None:
+                messages[user_msg_index]["content"].append(
+                    {"type": "image", "image": aux_image}
+                )
+            messages[user_msg_index]["content"].append({"type": "text", "text": question})
 
         print("Prepared messages for processor:", messages)
 
