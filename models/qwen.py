@@ -308,7 +308,7 @@ class Qwen(BaseModelWrapper):
         logits = self.get_next_token_logits(prompt, state["image"], state.get("choices"))
         k = min(8, logits.shape[-1])
         top_vals, _ = torch.topk(logits, k=k, dim=-1)
-        probs = torch.softmax(top_vals, dim=-1)[0].detach().cpu().numpy().astype(np.float32)
+        probs = torch.softmax(top_vals.float(), dim=-1)[0].detach().cpu().numpy().astype(np.float32)
         return probs
 
     def generate_final_answer(self, state: dict[str, Any], choices: list[str] | None = None) -> str:
