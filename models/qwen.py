@@ -1,13 +1,8 @@
 from __future__ import annotations
-
-
 import io
-
 import os
-
-from typing import Any, Callable
 import re
-import numpy as np
+from typing import Any, Callable
 
 import numpy as np
 
@@ -15,14 +10,16 @@ from PIL import Image
 
 import torch
 
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
 
 from .base_wrapper import BaseModelWrapper
 
 from eval.metrics import extract_answer_text
 
-REASONING_TAG_RE = re.compile(r"<reasoning_step>\s*(.*?)\s*</reasoning_step>", re.IGNORECASE | re.DOTALL)
-
-from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+REASONING_TAG_RE = re.compile(
+    r"<reasoning_step>\s*(.*?)\s*</reasoning_step>", re.IGNORECASE | re.DOTALL
+)
 
 
 class Qwen(BaseModelWrapper):
@@ -51,8 +48,9 @@ class Qwen(BaseModelWrapper):
 
         self.processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-8B-Thinking")
 
-    def prepare_inputs(self, question: str, image: Any,
-                       choices: list[str] | None) -> dict[str, Any]:
+    def prepare_inputs(
+        self, question: str, image: Any, choices: list[str] | None
+    ) -> dict[str, Any]:
         if isinstance(image, Image.Image):
             pil_image = image.convert("RGB")
         elif isinstance(image, np.ndarray):
@@ -91,28 +89,22 @@ class Qwen(BaseModelWrapper):
 
         system_prompt = self.model_cfg.get("system_prompt")
         if system_prompt:
-            messages.append({
-                "role": "system",
-                "content": [{
-                    "type": "text",
-                    "text": str(system_prompt)
-                }],
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": str(system_prompt)}],
+                }
+            )
 
-        messages.append({
-            "role":
-            "user",
-            "content": [
-                {
-                    "type": "image",
-                    "image": pil_image
-                },
-                {
-                    "type": "text",
-                    "text": question
-                },
-            ],
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_image},
+                    {"type": "text", "text": question},
+                ],
+            }
+        )
 
         print("Prepared messages for processor:", messages)
 
@@ -188,7 +180,9 @@ class Qwen(BaseModelWrapper):
             "reflection_instruction": "Wait. Think more carefully using visual evidence.",
         }
 
-    def _build_reasoning_prompt(self, state: dict[str, Any], reflection_instruction: str | None = None) -> str:
+    def _build_reasoning_prompt(
+        self, state: dict[str, Any], reflection_instruction: str | None = None
+    ) -> str:
         prompt_cfg = state.get("prompt_cfg") or {}
         pieces = []
         system_prompt = prompt_cfg.get("system")
@@ -199,16 +193,20 @@ class Qwen(BaseModelWrapper):
         pieces.append(f"Question: {state['question']}")
         choices_block = ""
         if state.get("choices"):
-            choices_block = "Choices:\n" + "\n".join(f"- {c}" for c in state["choices"]) 
+            choices_block = "Choices:\n" + "\n".join(f"- {c}" for c in state["choices"])
         if choices_block:
             pieces.append(choices_block)
         if state.get("reasoning_steps"):
             pieces.append("Reasoning so far:")
             for idx, step in enumerate(state["reasoning_steps"], start=1):
                 pieces.append(f"{idx}. {step}")
-        instruction = reflection_instruction or prompt_cfg.get("think_instruction", "Think step by step before giving the final answer.")
+        instruction = reflection_instruction or prompt_cfg.get(
+            "think_instruction", "Think step by step before giving the final answer."
+        )
         pieces.append(f"Instruction: {instruction}")
-        pieces.append("Write exactly one new reasoning step and wrap it in <reasoning_step>...</reasoning_step>. Do not give the final answer.")
+        pieces.append(
+            "Write exactly one new reasoning step and wrap it in <reasoning_step>...</reasoning_step>. Do not give the final answer."
+        )
         pieces.append("Assistant:")
         return "\n".join(pieces)
 
@@ -226,7 +224,9 @@ class Qwen(BaseModelWrapper):
             for idx, step in enumerate(state["reasoning_steps"], start=1):
                 pieces.append(f"{idx}. {step}")
         if state.get("choices"):
-            pieces.append("Select the best option from the provided choices and copy it exactly.")
+            pieces.append(
+                "Select the best option from the provided choices and copy it exactly."
+            )
         else:
             pieces.append("Provide the shortest correct final answer.")
         pieces.append("Return the final answer as <answer>...</answer>.")
@@ -238,11 +238,37 @@ class Qwen(BaseModelWrapper):
         generation_cfg.setdefault("max_new_tokens", 128)
         generation_cfg.setdefault("temperature", 0.0)
         generation_cfg.setdefault("top_k", None)
-        generation_cfg.setdefault("reasoning_step_tokens", max(32, min(128, int(generation_cfg["max_new_tokens"]) // 4)))
-        generation_cfg.setdefault("answer_max_new_tokens", min(64, int(generation_cfg["max_new_tokens"])))
+        generation_cfg.setdefault(
+            "reasoning_step_tokens",
+            max(32, min(128, int(generation_cfg["max_new_tokens"]) // 4)),
+        )
+        generation_cfg.setdefault(
+            "answer_max_new_tokens", min(64, int(generation_cfg["max_new_tokens"]))
+        )
         return generation_cfg
 
-    def start_reasoning(self, question: str, image: Any, choices: list[str] | None, prompt_cfg: dict[str, Any]) -> dict[str, Any]:
+    def _format_extra_visual_tokens_note(self, extra_visual_tokens: Any | None) -> str:
+        if extra_visual_tokens is None:
+            return ""
+        shape = getattr(extra_visual_tokens, "shape", None)
+        if shape is None:
+            try:
+                shape = (len(extra_visual_tokens),)
+            except TypeError:
+                shape = ()
+        shape_text = "x".join(str(dim) for dim in tuple(shape)) if shape else "unknown"
+        return (
+            "Additional selected visual evidence is available "
+            f"(token shape: {shape_text}). Use it to refine the next reasoning step."
+        )
+
+    def start_reasoning(
+        self,
+        question: str,
+        image: Any,
+        choices: list[str] | None,
+        prompt_cfg: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
             "question": self._normalize_question(question),
             "image": image,
@@ -251,6 +277,7 @@ class Qwen(BaseModelWrapper):
             "visual_features": None,
             "visual_tokens": None,
             "current_visual_features": None,
+            "current_visual_tokens": None,
             "reasoning_steps": [],
             "last_reasoning_embeddings": None,
             "raw_reasoning_steps": [],
@@ -258,9 +285,20 @@ class Qwen(BaseModelWrapper):
             "generation_cfg": {},
         }
 
-    def generate_reasoning_step(self, state: dict[str, Any], extra_visual_tokens: Any | None = None, reflection_instruction: str | None = None,) -> tuple[str, dict[str, Any]]:
+    def generate_reasoning_step(
+        self,
+        state: dict[str, Any],
+        extra_visual_tokens: Any | None = None,
+        reflection_instruction: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         generation_cfg = self._resolve_generation_cfg(state)
         prompt = self._build_reasoning_prompt(state, reflection_instruction)
+        if extra_visual_tokens is not None:
+            prompt = "\n".join(
+                [prompt, self._format_extra_visual_tokens_note(extra_visual_tokens)]
+            )
+            state["current_visual_tokens"] = extra_visual_tokens
+            state["current_visual_features"] = extra_visual_tokens
         raw_text = self.generate_per_token(
             prompt,
             state["image"],
@@ -277,8 +315,12 @@ class Qwen(BaseModelWrapper):
             step_text = lines[-1] if lines else raw_text.strip()
 
         # store minimal embeddings placeholder (zeros)
-        hidden_size = getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
-        state["last_reasoning_embeddings"] = np.zeros((1, int(hidden_size)), dtype=np.float32)
+        hidden_size = (
+            getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
+        )
+        state["last_reasoning_embeddings"] = np.zeros(
+            (1, int(hidden_size)), dtype=np.float32
+        )
         state["raw_reasoning_steps"].append(raw_text)
         state["reasoning_steps"].append(step_text)
         return step_text, state
@@ -286,32 +328,58 @@ class Qwen(BaseModelWrapper):
     def extract_reasoning_embeddings(self, state: dict[str, Any]) -> np.ndarray:
         emb = state.get("last_reasoning_embeddings")
         if emb is None:
-            hidden_size = getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
+            hidden_size = (
+                getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
+            )
             return np.zeros((1, int(hidden_size)), dtype=np.float32)
         return np.asarray(emb, dtype=np.float32)
 
-    def estimate_answer_distribution(self, state: dict[str, Any], choices: list[str] | None = None) -> np.ndarray:
+    def estimate_answer_distribution(
+        self, state: dict[str, Any], choices: list[str] | None = None
+    ) -> np.ndarray:
         resolved_choices = self._normalize_choices(choices) or state.get("choices")
         prompt = self._build_answer_prompt(state)
         gen_cfg = self._resolve_generation_cfg(state)
         if resolved_choices:
             # conservative heuristic: generate final answer and compare
-            pred = self.generate_full_answer(prompt, state["image"], None, max_new_tokens=int(gen_cfg["answer_max_new_tokens"]), temperature=float(gen_cfg["temperature"]))
-            probs = np.full((len(resolved_choices),), 1.0 / len(resolved_choices), dtype=np.float32)
+            pred = self.generate_full_answer(
+                prompt,
+                state["image"],
+                None,
+                max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
+                temperature=float(gen_cfg["temperature"]),
+            )
+            probs = np.full(
+                (len(resolved_choices),), 1.0 / len(resolved_choices), dtype=np.float32
+            )
             for i, c in enumerate(resolved_choices):
                 if str(pred).strip() == str(c).strip():
-                    probs = np.full((len(resolved_choices),), 0.05 / max(1, len(resolved_choices) - 1), dtype=np.float32)
+                    probs = np.full(
+                        (len(resolved_choices),),
+                        0.05 / max(1, len(resolved_choices) - 1),
+                        dtype=np.float32,
+                    )
                     probs[i] = 0.95
                     break
             return probs
         # no choices: return top-k next-token probs
-        logits = self.get_next_token_logits(prompt, state["image"], state.get("choices"))
+        logits = self.get_next_token_logits(
+            prompt, state["image"], state.get("choices")
+        )
         k = min(8, logits.shape[-1])
         top_vals, _ = torch.topk(logits, k=k, dim=-1)
-        probs = torch.softmax(top_vals.float(), dim=-1)[0].detach().cpu().numpy().astype(np.float32)
+        probs = (
+            torch.softmax(top_vals.float(), dim=-1)[0]
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
         return probs
 
-    def generate_final_answer(self, state: dict[str, Any], choices: list[str] | None = None) -> str:
+    def generate_final_answer(
+        self, state: dict[str, Any], choices: list[str] | None = None
+    ) -> str:
         resolved_choices = self._normalize_choices(choices) or state.get("choices")
         if resolved_choices is not None:
             state["choices"] = resolved_choices
@@ -610,8 +678,10 @@ class Qwen(BaseModelWrapper):
             )
 
         try:
-            
-            print("[generate_per_token] Attempting to decode with FlashAttention cache...")
+
+            print(
+                "[generate_per_token] Attempting to decode with FlashAttention cache..."
+            )
             return _decode_with_cache()
 
         except RuntimeError as e:
