@@ -259,6 +259,7 @@ class Qwen(BaseModelWrapper):
     def _default_prompt_cfg(self) -> dict[str, Any]:
         return {
             "system": self.model_cfg.get("system_prompt", ""),
+            "final_answer_system": self.model_cfg.get("final_answer_system_prompt", ""),
             "think_instruction": "Think step by step before giving the final answer.",
             "reflection_instruction": "Wait. Think more carefully using visual evidence.",
         }
@@ -613,8 +614,12 @@ class Qwen(BaseModelWrapper):
         # Restore the original system prompt for final-answer generation
         messages = state.get("messages")
         if messages:
-            base_system = (state.get("prompt_cfg") or {}).get("system") or self.model_cfg.get(
-                "system_prompt"
+            prompt_cfg = state.get("prompt_cfg") or {}
+            base_system = (
+                prompt_cfg.get("final_answer_system")
+                or self.model_cfg.get("final_answer_system_prompt")
+                or prompt_cfg.get("system")
+                or self.model_cfg.get("system_prompt")
             )
             if base_system:
                 restored = [dict(m) for m in messages]
