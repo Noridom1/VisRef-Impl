@@ -20,6 +20,8 @@ from eval.metrics import extract_answer_text
 REASONING_TAG_RE = re.compile(
     r"<reasoning_step>\s*(.*?)\s*</reasoning_step>", re.IGNORECASE | re.DOTALL
 )
+ANSWER_TAG_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.IGNORECASE | re.DOTALL)
+IM_END_RE = re.compile(r"<\|im_end\|>")
 
 
 class Qwen(BaseModelWrapper):
@@ -330,6 +332,11 @@ class Qwen(BaseModelWrapper):
         )
         return generation_cfg
 
+    def _clean_model_text(self, text: str) -> str:
+        cleaned = IM_END_RE.sub("", text)
+        cleaned = cleaned.replace("<|im_start|>", "")
+        return cleaned.strip()
+
     def _tokens_to_aux_image(self, extra_visual_tokens: Any | None) -> Image.Image | None:
         if extra_visual_tokens is None:
             return None
@@ -478,6 +485,22 @@ class Qwen(BaseModelWrapper):
             state["current_visual_features"] = extra_visual_tokens
 
         messages = state.get("messages")
+        # Override system prompt for reasoning steps to avoid answer-format leakage
+        if messages:
+            reasoning_system = (
+                "You are a helpful visual reasoning assistant. "
+                "Return exactly one <reasoning_step>...</reasoning_step> and nothing else."
+            )
+            prompt_cfg = state.get("prompt_cfg") or {}
+            think_inst = prompt_cfg.get(
+                "think_instruction", "Think step by step before giving the final answer."
+            )
+            reasoning_system = f"{reasoning_system} {think_inst}"
+            messages = [dict(m) for m in messages]
+            for m in messages:
+                if m.get("role") == "system" and isinstance(m.get("content"), list):
+                    m["content"] = [{"type": "text", "text": reasoning_system}]
+                    break
 
         raw_text = self.generate_per_token(
             prompt,
@@ -489,12 +512,15 @@ class Qwen(BaseModelWrapper):
             temperature=float(generation_cfg["temperature"]),
             top_k=generation_cfg.get("top_k"),
         )
-        match = REASONING_TAG_RE.findall(raw_text)
+        cleaned = self._clean_model_text(raw_text)
+        match = REASONING_TAG_RE.findall(cleaned)
         if match:
             step_text = match[-1].strip()
         else:
-            lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
-            step_text = lines[-1] if lines else raw_text.strip()
+            # Fall back to last non-empty line, but strip any answer tags
+            cleaned = ANSWER_TAG_RE.sub("", cleaned)
+            lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
+            step_text = lines[-1] if lines else cleaned.strip()
 
         # store minimal embeddings placeholder (zeros)
         hidden_size = (
@@ -510,9 +536,11 @@ class Qwen(BaseModelWrapper):
         if "messages" not in state or state["messages"] is None:
             state["messages"] = []
 
-        state["messages"].append(
-            {"role": "assistant", "content": [{"type": "text", "text": step_text}]}
-        )
+        if step_text:
+            wrapped = f"<reasoning_step>{step_text}</reasoning_step>"
+            state["messages"].append(
+                {"role": "assistant", "content": [{"type": "text", "text": wrapped}]}
+            )
         return step_text, state
 
     def extract_reasoning_embeddings(self, state: dict[str, Any]) -> np.ndarray:
@@ -584,12 +612,27 @@ class Qwen(BaseModelWrapper):
         # Build answer prompt without inlining reasoning steps; rely on state['messages']
         prompt = self._build_answer_prompt(state, include_steps=False)
         extra_visual_tokens = state.get("current_visual_tokens")
+
+        # Restore the original system prompt for final-answer generation
+        messages = state.get("messages")
+        if messages:
+            base_system = (state.get("prompt_cfg") or {}).get("system") or self.model_cfg.get(
+                "system_prompt"
+            )
+            if base_system:
+                restored = [dict(m) for m in messages]
+                for m in restored:
+                    if m.get("role") == "system" and isinstance(m.get("content"), list):
+                        m["content"] = [{"type": "text", "text": str(base_system)}]
+                        break
+                messages = restored
+
         raw = self.generate_per_token(
             prompt,
             state["image"],
             state.get("choices"),
             extra_visual_tokens=extra_visual_tokens,
-            messages=state.get("messages"),
+            messages=messages,
             max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
             temperature=float(gen_cfg["temperature"]),
             top_k=gen_cfg.get("top_k"),
