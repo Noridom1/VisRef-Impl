@@ -6,6 +6,8 @@ import io
 import os
 
 from typing import Any, Callable
+import re
+import numpy as np
 
 import numpy as np
 
@@ -15,6 +17,10 @@ import torch
 
 
 from .base_wrapper import BaseModelWrapper
+
+from eval.metrics import extract_answer_text
+
+REASONING_TAG_RE = re.compile(r"<reasoning_step>\s*(.*?)\s*</reasoning_step>", re.IGNORECASE | re.DOTALL)
 
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
@@ -158,6 +164,170 @@ class Qwen(BaseModelWrapper):
         )
 
         return output_text[0]
+
+    # --- Minimal stateful API to match InternVL semantics -----------------
+    def _normalize_question(self, question: str) -> str:
+        normalized = re.sub(r"<image\d*>", "", str(question))
+        normalized = normalized.replace("<image>", "")
+        return normalized.strip()
+
+    def _normalize_choices(self, choices: Any) -> list[str] | None:
+        if choices is None:
+            return None
+        if isinstance(choices, dict):
+            return [f"{key}. {value}" for key, value in choices.items()]
+        if isinstance(choices, (list, tuple)):
+            return [str(choice).strip() for choice in choices if str(choice).strip()]
+        text = str(choices).strip()
+        return [text] if text else None
+
+    def _default_prompt_cfg(self) -> dict[str, Any]:
+        return {
+            "system": self.model_cfg.get("system_prompt", ""),
+            "think_instruction": "Think step by step before giving the final answer.",
+            "reflection_instruction": "Wait. Think more carefully using visual evidence.",
+        }
+
+    def _build_reasoning_prompt(self, state: dict[str, Any], reflection_instruction: str | None = None) -> str:
+        prompt_cfg = state.get("prompt_cfg") or {}
+        pieces = []
+        system_prompt = prompt_cfg.get("system")
+        if system_prompt:
+            pieces.append(f"System: {system_prompt}")
+        pieces.append("User:")
+        pieces.append("<image>")
+        pieces.append(f"Question: {state['question']}")
+        choices_block = ""
+        if state.get("choices"):
+            choices_block = "Choices:\n" + "\n".join(f"- {c}" for c in state["choices"]) 
+        if choices_block:
+            pieces.append(choices_block)
+        if state.get("reasoning_steps"):
+            pieces.append("Reasoning so far:")
+            for idx, step in enumerate(state["reasoning_steps"], start=1):
+                pieces.append(f"{idx}. {step}")
+        instruction = reflection_instruction or prompt_cfg.get("think_instruction", "Think step by step before giving the final answer.")
+        pieces.append(f"Instruction: {instruction}")
+        pieces.append("Write exactly one new reasoning step and wrap it in <reasoning_step>...</reasoning_step>. Do not give the final answer.")
+        pieces.append("Assistant:")
+        return "\n".join(pieces)
+
+    def _build_answer_prompt(self, state: dict[str, Any]) -> str:
+        prompt_cfg = state.get("prompt_cfg") or {}
+        pieces = []
+        system_prompt = prompt_cfg.get("system")
+        if system_prompt:
+            pieces.append(f"System: {system_prompt}")
+        pieces.append("User:")
+        pieces.append("<image>")
+        pieces.append(f"Question: {state['question']}")
+        if state.get("reasoning_steps"):
+            pieces.append("Reasoning:")
+            for idx, step in enumerate(state["reasoning_steps"], start=1):
+                pieces.append(f"{idx}. {step}")
+        if state.get("choices"):
+            pieces.append("Select the best option from the provided choices and copy it exactly.")
+        else:
+            pieces.append("Provide the shortest correct final answer.")
+        pieces.append("Return the final answer as <answer>...</answer>.")
+        pieces.append("Assistant:")
+        return "\n".join(pieces)
+
+    def _resolve_generation_cfg(self, state: dict[str, Any]) -> dict[str, Any]:
+        generation_cfg = dict(state.get("generation_cfg", {}))
+        generation_cfg.setdefault("max_new_tokens", 128)
+        generation_cfg.setdefault("temperature", 0.0)
+        generation_cfg.setdefault("top_k", None)
+        generation_cfg.setdefault("reasoning_step_tokens", max(32, min(128, int(generation_cfg["max_new_tokens"]) // 4)))
+        generation_cfg.setdefault("answer_max_new_tokens", min(64, int(generation_cfg["max_new_tokens"])))
+        return generation_cfg
+
+    def start_reasoning(self, question: str, image: Any, choices: list[str] | None, prompt_cfg: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "question": self._normalize_question(question),
+            "image": image,
+            "choices": self._normalize_choices(choices),
+            "prompt_cfg": dict(prompt_cfg),
+            "visual_features": None,
+            "visual_tokens": None,
+            "current_visual_features": None,
+            "reasoning_steps": [],
+            "last_reasoning_embeddings": None,
+            "raw_reasoning_steps": [],
+            "raw_final_answer": "",
+            "generation_cfg": {},
+        }
+
+    def generate_reasoning_step(self, state: dict[str, Any], extra_visual_tokens: Any | None = None, reflection_instruction: str | None = None,) -> tuple[str, dict[str, Any]]:
+        generation_cfg = self._resolve_generation_cfg(state)
+        prompt = self._build_reasoning_prompt(state, reflection_instruction)
+        raw_text = self.generate_per_token(
+            prompt,
+            state["image"],
+            state.get("choices"),
+            max_new_tokens=int(generation_cfg["reasoning_step_tokens"]),
+            temperature=float(generation_cfg["temperature"]),
+            top_k=generation_cfg.get("top_k"),
+        )
+        match = REASONING_TAG_RE.findall(raw_text)
+        if match:
+            step_text = match[-1].strip()
+        else:
+            lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+            step_text = lines[-1] if lines else raw_text.strip()
+
+        # store minimal embeddings placeholder (zeros)
+        hidden_size = getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
+        state["last_reasoning_embeddings"] = np.zeros((1, int(hidden_size)), dtype=np.float32)
+        state["raw_reasoning_steps"].append(raw_text)
+        state["reasoning_steps"].append(step_text)
+        return step_text, state
+
+    def extract_reasoning_embeddings(self, state: dict[str, Any]) -> np.ndarray:
+        emb = state.get("last_reasoning_embeddings")
+        if emb is None:
+            hidden_size = getattr(getattr(self.model, "config", None), "hidden_size", None) or 768
+            return np.zeros((1, int(hidden_size)), dtype=np.float32)
+        return np.asarray(emb, dtype=np.float32)
+
+    def estimate_answer_distribution(self, state: dict[str, Any], choices: list[str] | None = None) -> np.ndarray:
+        resolved_choices = self._normalize_choices(choices) or state.get("choices")
+        prompt = self._build_answer_prompt(state)
+        gen_cfg = self._resolve_generation_cfg(state)
+        if resolved_choices:
+            # conservative heuristic: generate final answer and compare
+            pred = self.generate_full_answer(prompt, state["image"], None, max_new_tokens=int(gen_cfg["answer_max_new_tokens"]), temperature=float(gen_cfg["temperature"]))
+            probs = np.full((len(resolved_choices),), 1.0 / len(resolved_choices), dtype=np.float32)
+            for i, c in enumerate(resolved_choices):
+                if str(pred).strip() == str(c).strip():
+                    probs = np.full((len(resolved_choices),), 0.05 / max(1, len(resolved_choices) - 1), dtype=np.float32)
+                    probs[i] = 0.95
+                    break
+            return probs
+        # no choices: return top-k next-token probs
+        logits = self.get_next_token_logits(prompt, state["image"], state.get("choices"))
+        k = min(8, logits.shape[-1])
+        top_vals, _ = torch.topk(logits, k=k, dim=-1)
+        probs = torch.softmax(top_vals, dim=-1)[0].detach().cpu().numpy().astype(np.float32)
+        return probs
+
+    def generate_final_answer(self, state: dict[str, Any], choices: list[str] | None = None) -> str:
+        resolved_choices = self._normalize_choices(choices) or state.get("choices")
+        if resolved_choices is not None:
+            state["choices"] = resolved_choices
+        gen_cfg = self._resolve_generation_cfg(state)
+        prompt = self._build_answer_prompt(state)
+        raw = self.generate_per_token(
+            prompt,
+            state["image"],
+            state.get("choices"),
+            max_new_tokens=int(gen_cfg["answer_max_new_tokens"]),
+            temperature=float(gen_cfg["temperature"]),
+            top_k=gen_cfg.get("top_k"),
+        )
+        state["raw_final_answer"] = raw
+        final = extract_answer_text(raw)
+        return final or raw.strip()
 
     def get_next_token_logits(
         self,

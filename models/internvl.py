@@ -628,6 +628,7 @@ class InternVL(BaseModelWrapper):
         ).to(self.model_dtype)
 
         prompt = self._build_reasoning_prompt(state, reflection_instruction)
+        logger.debug("Generated reasoning prompt:\n%s", prompt)
         raw_text, prefix_ids, generated_ids = self._decode_new_tokens(
             prompt=prompt,
             visual_features=visual_features,

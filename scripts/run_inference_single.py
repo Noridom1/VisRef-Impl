@@ -120,7 +120,7 @@ def main() -> None:
             print(f"[{idx}] {step}")
     else:
         print("(no reasoning steps returned)")
-
+    
     if args.save_record:
         run_name = f"{cfg['dataset']['name']}_{cfg['model']['name']}_{args.mode}"
         sample_id = str(record.get("sample_id", "sample")).replace("/", "_")

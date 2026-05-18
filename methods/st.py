@@ -10,8 +10,9 @@ from engine.stopping import predictive_entropy, should_stop
 logger = logging.getLogger(__name__)
 
 
-def run_st(sample: dict[str, Any], model_wrapper,
-           cfg: dict[str, Any]) -> dict[str, Any]:
+def run_st(
+    sample: dict[str, Any], model_wrapper, cfg: dict[str, Any]
+) -> dict[str, Any]:
     start = time.perf_counter()
     prompt_cfg = cfg["prompt"]
     vis_cfg = cfg["visref"]
@@ -32,7 +33,7 @@ def run_st(sample: dict[str, Any], model_wrapper,
         entropy = predictive_entropy(probs)
         entropy_trace.append(entropy)
         latest_step = ""
-        reasoning_steps = state.get("reasoning_steps", [])
+        reasoning_steps = state.get("raw_reasoning_steps", [])
         if reasoning_steps:
             latest_step = str(reasoning_steps[-1]).strip()
         logger.info(
@@ -42,11 +43,20 @@ def run_st(sample: dict[str, Any], model_wrapper,
             entropy,
             latest_step,
         )
-        if should_stop(entropy, vis_cfg["entropy_threshold"], step,
-                       vis_cfg["max_steps"]):
+        if should_stop(
+            entropy, vis_cfg["entropy_threshold"], step, vis_cfg["max_steps"]
+        ):
             break
 
     pred = model_wrapper.generate_final_answer(state, choices)
+    logger.info(
+        "[ST] sample_id=%s final_answer=%s gold_answer=%s steps_used=%d latency_sec=%.2f",
+        sample.get("id"),
+        pred,
+        sample["answer"],
+        step,
+        time.perf_counter() - start,
+    )
     latency = time.perf_counter() - start
 
     return {
